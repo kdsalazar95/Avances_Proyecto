@@ -1,0 +1,13 @@
+{
+    "entrenamiento": {
+        "episodios": 3000,
+        "semilla": 42
+    },
+    "agente": {
+        "alpha": 0.1,
+        "gamma": 1.0,
+        "epsilon_inicial": 0.3,
+        "epsilon_minimo": 0.01,
+        "decaimiento_epsilon": 0.999
+    }
+}

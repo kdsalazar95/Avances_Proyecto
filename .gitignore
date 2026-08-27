@@ -1,0 +1,16 @@
+# Entorno uv
+.venv/
+.python-version
+
+# Resultados
+
+historial_busqueda_dijkstra.csv
+historial_entrenamiento.csv
+
+progreso_entrenamiento.png
+
+# cache
+__pycache__/
+.pytest_cache/
+
+
