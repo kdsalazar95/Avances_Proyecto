@@ -43,7 +43,9 @@ solo trabajan con estados y acciones genéricos.
 
 ---
 
-## `RL/entorno_tsp.py`
+## Descripción de scripts
+
+### `entorno_tsp.py`
 
 Envuelve el mismo `Grafo` de ciudades que usa Dijkstra, pero con una
 interfaz distinta, la que necesita un agente para interactuar paso a
@@ -58,7 +60,7 @@ paso, en vez de la exploración exhaustiva que usa Dijkstra.
 
 ---
 
-## `RL/agente.py` — clase `AgenteQLearning`
+### `agente.py` — clase `AgenteQLearning`
 
 Encapsula toda la lógica de decisión y aprendizaje. No sabe nada de
 TSP: solo recibe estados y acciones genéricos.
@@ -80,7 +82,7 @@ mejor que se puede esperar del estado al que se llegó
 
 ---
 
-## `RL/ql.py` — el bucle de entrenamiento
+### `ql.py` — el bucle de entrenamiento
 
 Es el módulo más simple: no toma ninguna decisión, solo hace interactuar
 al agente con el entorno. No sabe nada de TSP ni de la fórmula de
@@ -93,7 +95,7 @@ Q-learning, eso vive en `agente.py`.
 
 ---
 
-## `RL/registro.py` — clase `RegistroEntrenamiento`
+### `registro.py` — clase `RegistroEntrenamiento`
 
 Acumula las métricas de cada episodio y las exporta a CSV, para poder
 graficar el progreso del entrenamiento después.
@@ -106,7 +108,7 @@ graficar el progreso del entrenamiento después.
 
 ---
 
-## `RL/train.py`
+### `train.py`
 
 El script de entrenamiento.
 
@@ -127,7 +129,7 @@ carpeta se corra.
 
 ---
 
-## `RL/plot.py`
+### `plot.py`
 
 Script de visualización, independiente de `train.py`: solo lee el CSV
 ya generado, nunca vuelve a entrenar nada.
@@ -155,13 +157,3 @@ train.py
 plot.py
   └─ lee historial_entrenamiento.csv → progreso_entrenamiento.png
 ```
-
-## Diferencia clave con Dijkstra
-
-| | Dijkstra | Q-learning |
-|---|---|---|
-| Tipo de búsqueda | Exhaustiva, exacta | Aprendida, por prueba y error |
-| Garantía de optimalidad | Sí, siempre | No, depende del entrenamiento |
-| Una sola pasada o muchas | Una sola pasada | Muchos episodios (miles) |
-| Qué se registra | Estados expandidos | Progreso por episodio (costo, epsilon) |
-| Escala a problemas grandes | Mal (crece como `2^n`) | Mejor, pero sin garantías |

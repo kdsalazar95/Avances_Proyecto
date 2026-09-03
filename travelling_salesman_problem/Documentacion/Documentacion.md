@@ -45,6 +45,7 @@ un estado, cómo se llega de uno a otro) del **algoritmo que lo resuelve**
 mínimo, no solo el TSP.
 
 ---
+## Descripción de scripts
 
 ## `comun/grafo.py`
 
@@ -63,7 +64,7 @@ No sabe nada de TSP ni de estados — es solo el mapa.
 
 ---
 
-## `Dijkstra/problema_tsp.py`
+### `problema_tsp.py`
 
 Toma un `Grafo` de ciudades y lo convierte en el grafo de **estados**
 `(ciudad, mascara)` que Dijkstra necesita.
@@ -79,7 +80,7 @@ Toma un `Grafo` de ciudades y lo convierte en el grafo de **estados**
 
 ---
 
-## `Dijkstra/dijkstra.py`
+### `dijkstra.py`
 
 El algoritmo, completamente genérico: no sabe qué es una ciudad. Solo
 necesita que el `problema` que recibe tenga `estado_inicial()` y
@@ -93,13 +94,13 @@ necesita que el `problema` que recibe tenga `estado_inicial()` y
 **Por qué es exacto:** Dijkstra expande siempre el estado de menor costo
 acumulado conocido. Cuando un estado se marca como "visitado" (se
 expande por primera vez), ya no puede existir un camino más barato hacia
-él — esa es la propiedad que garantiza optimalidad, siempre que todos los
+él, esa es la propiedad que garantiza optimalidad, siempre que todos los
 pesos de las aristas sean no negativos (que es el caso aquí: son
 distancias).
 
 ---
 
-## `Dijkstra/reg_busqueda.py`
+### `reg_busqueda.py`
 
 Acumula métricas de cada iteración de la búsqueda (una expansión de
 estado a la vez) y las exporta a CSV. No hay "episodios" como en RL —
@@ -112,7 +113,7 @@ Dijkstra hace una sola pasada.
 
 ---
 
-## `Dijkstra/main.py`
+### `main.py`
 
 El script que arma todo y lo ejecuta.
 
@@ -121,12 +122,6 @@ El script que arma todo y lo ejecuta.
 | `resolver_tsp(problema, registro=None)` | Llama a `dijkstra(problema, registro)` para obtener los costos y padres de todos los estados. Luego busca, entre **todos los estados "meta"** (ciudades ya todas visitadas), cuál da el menor costo total al sumarle el regreso al origen (`costo_cierre_ciclo`). Reconstruye la ruta completa con `reconstruir_camino` y le agrega el regreso final a la ciudad de inicio. |
 | Bloque `if __name__ == "__main__"` | Construye el `Grafo` de ciudades arista por arista, crea el `ProblemaTSP`, mide el tiempo de ejecución, corre `resolver_tsp` con un `RegistroBusqueda`, guarda el CSV de la búsqueda, e imprime la ruta óptima, su costo, cuántos estados se expandieron y el tiempo total. |
 
-**Nota sobre el cierre del ciclo:** `es_meta` en `problema_tsp.py` solo
-verifica que se hayan visitado todas las ciudades, no que se haya vuelto
-al origen. Por eso `resolver_tsp` revisa manualmente, entre todos los
-estados meta, cuál da el menor costo **sumando** el tramo de regreso —
-así se evita expandir estados extra dentro del grafo de estados solo
-para representar "volver al inicio".
 
 ---
 
