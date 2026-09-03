@@ -10,15 +10,15 @@ igual a la distancia recorrida) en cada paso, y ajustando su
 conocimiento poco a poco a lo largo de muchos episodios de práctica.
 
 Se usa **Q-learning tabular**, el algoritmo de RL más simple para
-espacios de estados y acciones discretos: no hay redes neuronales, se
+espacios de estados y acciones discretos, no hay redes neuronales, se
 aprende directamente una tabla `Q[estado, accion]` que estima "qué tan
 buena es tomar esta acción desde este estado". Con suficiente
-entrenamiento, esta tabla converge hacia el óptimo — pero, a diferencia
+entrenamiento, esta tabla converge hacia el óptimo pero, a diferencia
 de Dijkstra, **no hay garantía matemática** de que siempre lo alcance:
 depende de los hiperparámetros y de cuánto se entrene.
 
 El estado sigue siendo el mismo que en la rama de Dijkstra:
-`(ciudad_actual, mascara_de_ciudades_visitadas)` — la diferencia no está
+`(ciudad_actual, mascara_de_ciudades_visitadas)`, la diferencia no está
 en qué es un estado, sino en **cómo se explora** el espacio de estados
 (exhaustivo vs. aprendido).
 
@@ -38,7 +38,7 @@ RL/plot.py                → lee el CSV del entrenamiento y grafica el progreso
 La idea de diseño es la misma que en la rama de Dijkstra: separar el
 **entorno** (representa el problema) del **agente** (decide y aprende) y
 del **bucle de entrenamiento** (los hace interactuar). Esto significa que
-`ql.py` no sabe nada de ciudades, y `agente.py` no sabe nada de TSP —
+`ql.py` no sabe nada de ciudades, y `agente.py` no sabe nada de TSP,
 solo trabajan con estados y acciones genéricos.
 
 ---
@@ -46,9 +46,8 @@ solo trabajan con estados y acciones genéricos.
 ## `RL/entorno_tsp.py`
 
 Envuelve el mismo `Grafo` de ciudades que usa Dijkstra, pero con una
-interfaz distinta: la que necesita un agente para interactuar **paso a
-paso** (parecida a la de Gymnasium/OpenAI Gym), en vez de la exploración
-exhaustiva que usa Dijkstra.
+interfaz distinta, la que necesita un agente para interactuar paso a
+paso, en vez de la exploración exhaustiva que usa Dijkstra.
 
 | Función | Qué hace |
 |---|---|
@@ -61,7 +60,7 @@ exhaustiva que usa Dijkstra.
 
 ## `RL/agente.py` — clase `AgenteQLearning`
 
-Encapsula **toda** la lógica de decisión y aprendizaje. No sabe nada de
+Encapsula toda la lógica de decisión y aprendizaje. No sabe nada de
 TSP: solo recibe estados y acciones genéricos.
 
 | Método | Qué hace |
@@ -75,7 +74,7 @@ TSP: solo recibe estados y acciones genéricos.
 
 **La fórmula de actualización, en palabras:** el nuevo valor de `Q(s,a)`
 se mueve una fracción (`alpha`) de la distancia que hay entre su valor
-actual y el "objetivo" — lo que realmente se obtuvo (`recompensa`) más lo
+actual y el "objetivo", lo que realmente se obtuvo (`recompensa`) más lo
 mejor que se puede esperar del estado al que se llegó
 (`gamma * max Q(s',a')`).
 
@@ -85,7 +84,7 @@ mejor que se puede esperar del estado al que se llegó
 
 Es el módulo más simple: no toma ninguna decisión, solo hace interactuar
 al agente con el entorno. No sabe nada de TSP ni de la fórmula de
-Q-learning — eso vive en `agente.py`.
+Q-learning, eso vive en `agente.py`.
 
 | Función | Qué hace |
 |---|---|
@@ -109,8 +108,7 @@ graficar el progreso del entrenamiento después.
 
 ## `RL/train.py`
 
-El script de entrenamiento (equivalente a un `train.py` típico de un
-proyecto de ML/RL).
+El script de entrenamiento.
 
 | Paso | Qué hace |
 |---|---|
@@ -124,7 +122,7 @@ proyecto de ML/RL).
 
 Todas las rutas de archivo (`config_agente.json`, el CSV de salida) se
 construyen relativas a la ubicación del propio script, no al directorio
-desde donde se ejecuta — así `train.py` funciona sin importar desde qué
+desde donde se ejecuta, así `train.py` funciona sin importar desde qué
 carpeta se corra.
 
 ---
