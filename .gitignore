@@ -22,5 +22,9 @@ pe_instructions/
 graphs/
 **/programas/*
 
-# Excepcion: el horario de referencia 2x2 que usan las pruebas
+# Excepciones: el formato de la CGRA (lo leen Python y los skills) y el
+# horario de referencia 2x2 que usan las pruebas
+!**/src/cgra.json
 !**/test/datos/**
+# ...pero los .txt de test/datos no se suben
+**/test/datos/**/*.txt

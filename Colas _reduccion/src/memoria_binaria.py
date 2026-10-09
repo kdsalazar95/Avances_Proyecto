@@ -32,9 +32,13 @@ CABECERA = struct.Struct("<8sII")
 SIMBOLO = struct.Struct("<16sIII")
 
 
-def cargar_memoria(ruta):
-    """Devuelve ``(memoria, formas)``: los bancos con sus valores y la
-    forma ``(filas, columnas)`` de cada uno, en el orden del archivo."""
+def leer_imagen(ruta):
+    """Lee memoria.bin tal como está en el archivo: devuelve ``(palabras,
+    simbolos)``, con la memoria plana y, por cada región, su
+    ``(direccion, filas, columnas)`` dentro de esa memoria.
+
+    Es la imagen que el cargador copia a la memoria de la CGRA, como el
+    sistema operativo copia las secciones de un ejecutable."""
     datos = Path(ruta).read_bytes()
     if len(datos) < CABECERA.size:
         raise ValueError(f"{ruta}: archivo demasiado corto para ser una memoria de la CGRA")
@@ -46,15 +50,24 @@ def cargar_memoria(ruta):
     if len(datos) != esperado:
         raise ValueError(f"{ruta}: se esperaban {esperado} bytes y tiene {len(datos)}")
 
-    valores = struct.unpack_from(f"<{palabras}f", datos, inicio_datos)
-    memoria, formas = {}, {}
+    valores = [numero(valor) for valor in struct.unpack_from(f"<{palabras}f", datos, inicio_datos)]
+    simbolos = {}
     for r in range(cantidad):
         nombre, direccion, filas, columnas = SIMBOLO.unpack_from(datos, CABECERA.size + r * SIMBOLO.size)
         nombre = nombre.split(b"\0", 1)[0].decode("ascii")
-        tamano = filas * columnas
-        if direccion + tamano > palabras:
+        if direccion + filas * columnas > palabras:
             raise ValueError(f"{ruta}: la región '{nombre}' se sale de la memoria")
-        memoria[nombre] = [numero(valor) for valor in valores[direccion:direccion + tamano]]
+        simbolos[nombre] = (direccion, filas, columnas)
+    return valores, simbolos
+
+
+def cargar_memoria(ruta):
+    """Devuelve ``(memoria, formas)``: los bancos con sus valores y la
+    forma ``(filas, columnas)`` de cada uno, en el orden del archivo."""
+    valores, simbolos = leer_imagen(ruta)
+    memoria, formas = {}, {}
+    for nombre, (direccion, filas, columnas) in simbolos.items():
+        memoria[nombre] = valores[direccion:direccion + filas * columnas]
         formas[nombre] = (filas, columnas)
     return memoria, formas
 

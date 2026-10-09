@@ -37,16 +37,68 @@ de rango. Los skills tambien vuelven a generar `memoria.bin` (ver
 
 ## Configuracion de la CGRA
 
-En `src/run_cgra.py` solo se configura la malla:
+La CGRA se describe en `src/cgra.json`. Lo leen tanto `run_cgra.py` como los
+skills, asi que el compilador y el simulador siempre usan la misma CGRA:
 
-```python
-FILAS = 4
-COLUMNAS = 4
+```json
+{
+  "filas": 4,
+  "columnas": 4,
+  "palabras_memoria": 4096,
+  "tipos_pe": {
+    "M": {"nombre": "memoria", "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV"]},
+    "C": {"nombre": "computo", "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]}
+  },
+  "distribucion": {"oeste": "M", "este": "M", "resto": "C"}
+}
 ```
 
-`FILAS x COLUMNAS` define la cantidad de PEs. Los skills leen estos valores y
-los conservan durante todo el pipeline, y `run_cgra.py` los usa como valores
-por defecto al ejecutar.
+- `filas x columnas` es la cantidad de PEs.
+- `palabras_memoria` es el tamano de la memoria de datos.
+- `tipos_pe` dice que instrucciones puede ejecutar cada tipo.
+- `distribucion` es la regla que da el tipo de cada PE: los de la columna
+  oeste y este son de memoria (`M`) y el resto de computo (`C`). Los bordes
+  posibles son `norte`, `sur`, `oeste` y `este`; en una esquina mandan
+  `oeste`/`este`.
+
+Para cambiar el tamano basta con cambiar `filas` y `columnas`: la malla se
+arma sola con la regla. Por ejemplo, con `"filas": 8, "columnas": 8` queda:
+
+```text
+M C C C C C C M
+M C C C C C C M
+...              (8 filas)
+```
+
+Para una distribucion especial que no sigue la regla, se puede escribir la
+malla completa en `"malla"` (una fila por linea, por ejemplo `"M C C M"`), que
+reemplaza a `distribucion`.
+
+### Tipos de PE
+
+| Tipo | Donde | Puede | No puede |
+|---|---|---|---|
+| **memoria (M)** | columnas oeste y este | `LD`, `ST`, `SEND`, `RECV`, `MOV`, `NOP` | calcular |
+| **computo (C)** | centro | `ADD`, `SUB`, `MUL`, `DIV`, `SEND`, `RECV`, `MOV`, `NOP` | acceder a memoria |
+
+Los PEs de memoria leen los operandos y se los envian a los PEs de computo;
+estos calculan y devuelven el resultado para que el PE de memoria lo guarde.
+Si un programa usa una instruccion que el tipo de su PE no permite,
+`run_cgra.py` no lo carga e indica el PE y el ciclo:
+
+```text
+No se pudo cargar el programa: 944 instrucciones no respetan el tipo de su PE:
+  PE00 (memoria), ciclo 30: ADD no está permitido
+  ...
+```
+
+Para cambiar la CGRA (otro tamano u otra distribucion de tipos) se edita
+`src/cgra.json` y se vuelven a correr los skills. Para probar otro formato sin
+tocar el de por defecto:
+
+```bash
+uv run src/run_cgra.py src/matmul --cgra otra_cgra.json
+```
 
 La CGRA funciona como un procesador: **no se le indica que operacion va a
 ejecutar**. Cada PE es un procesador pequeno que ejecuta su programa
@@ -103,24 +155,19 @@ Los detalles de cada paso estan en `agent_skills/README.md`.
 ## Operaciones por tiles
 
 La salida de `matmul` o de `convolucion` puede ser mayor que la malla. En ese
-caso se procesa por tiles con memoria compartida. Por defecto, el tile tiene el
-mismo tamano que la malla. Por ejemplo, una malla `2x2` procesa tiles `2x2`:
+caso se procesa por tiles. Solo los PEs de computo calculan, asi que el tile es
+el bloque de PEs de computo: `4x2` en la CGRA por defecto. Una salida `9x9`
+necesita `3 x 5 = 15` tiles.
 
-```text
-PE00 -> elemento local [0][0]
-PE01 -> elemento local [0][1]
-PE10 -> elemento local [1][0]
-PE11 -> elemento local [1][1]
-```
+Cada PE de computo calcula un elemento del tile. El PE de memoria de su misma
+fila (el vecino oeste para la columna 1, el vecino este para la columna 2) le
+carga los dos operandos de cada paso con `LD` y se los envia con `SEND`. Al
+terminar el tile, el PE de computo devuelve su resultado y el PE de memoria lo
+guarda con `ST`. En un tile de borde, los PEs que quedan fuera hacen `NOP`.
 
-Cada PE lee directamente sus operandos mediante `LD`, acumula su resultado
-local y escribe una posicion del resultado mediante `ST`. No se usan
-`SEND`/`RECV` para transportar operandos. Los tiles de salida se procesan uno
-por uno hasta cubrir todo el resultado; en un tile de borde, los PEs que quedan
-fuera hacen `NOP`.
-
-En una reduccion el tiling es distinto: cada PE acumula localmente su parte del
-vector y despues se corre una sola vez la ruta de reduccion hacia `PE00`.
+En una reduccion el tiling es distinto: cada PE de computo acumula localmente su
+parte del vector, despues se reduce entre los PEs de computo hacia `PE01`, y
+`PE01` le manda el total a `PE00`, que lo guarda en `result[0]`.
 
 ## Ejecutar la CGRA
 
@@ -135,13 +182,13 @@ No hay que indicar la operacion ni el tamano del resultado: al terminar se
 muestran las regiones de memoria que escribieron los PEs, cada una con la forma
 que declara `memoria.bin` (un valor, un vector o una matriz).
 
-Para correr con una malla distinta de la configurada:
+Para correr con una CGRA distinta de la configurada:
 
 ```bash
-uv run src/run_cgra.py src/reduccion --filas 8 --columnas 8
+uv run src/run_cgra.py src/reduccion --cgra otra_cgra.json
 ```
 
-Los `PE*.txt` de la carpeta tienen que corresponder a esa malla.
+Los `PE*.txt` de la carpeta tienen que corresponder a esa CGRA (tamano y tipos).
 
 ### Reporte de ciclos
 
@@ -182,6 +229,22 @@ exacto esta documentado en `src/memoria_cgra.h`.
 Las matrices se guardan aplanadas fila por fila. Los programas de los PEs usan
 estos nombres de region en sus `LD`/`ST`.
 
+`memoria.bin` es una imagen, no la memoria de la CGRA. Al correr un programa,
+`run_cgra.py` hace lo mismo que un sistema operativo con un ejecutable:
+
+1. **Enciende** la CGRA (`src/cgra.py`) segun `src/cgra.json`: una memoria de
+   datos de `palabras_memoria` palabras, toda en cero, y PEs con su tipo,
+   registros en cero y sin programa.
+2. **Carga** el programa (`src/cargador.py`): verifica que la imagen quepa,
+   que cada PE solo use instrucciones de su tipo, la copia al inicio de la
+   memoria (el resto sigue en cero), convierte cada
+   `a[3]` de los `LD`/`ST` en la direccion de esa palabra y le da a cada PE su
+   programa.
+3. **Ejecuta** los ciclos.
+
+Si la imagen no cabe en la memoria, la carga falla con un mensaje en vez de
+cortarla; en ese caso hay que aumentar `palabras_memoria` en `src/cgra.json`.
+
 Para usar otra memoria u otros programas de PE:
 
 ```bash
@@ -194,6 +257,10 @@ uv run src/run_cgra.py src/matmul --instrucciones otra_carpeta/
 ```bash
 # Mostrar en pantalla los ciclos de computo y comunicacion
 uv run src/run_cgra.py src/convolucion --ciclos
+
+# Mostrar la traza: en cada ciclo, que instruccion ejecuto cada PE (sin los
+# NOP) y que escribio en registros o memoria. Sirve para cualquier programa.
+uv run src/run_cgra.py src/reduccion --traza
 
 # Guardar el reporte en otra ruta
 uv run src/run_cgra.py src/convolucion \

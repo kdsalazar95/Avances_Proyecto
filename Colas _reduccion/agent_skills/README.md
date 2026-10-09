@@ -7,8 +7,8 @@ the initial memory those programs run on (`memoria.bin`).
 The supported sources are `src/reduccion/reduccion.c`, `src/matmul/matmul.c`,
 and `src/convolucion/convolucion.c`. Their sizes come from the `#define`
 constants of each source, the source to compile comes from the request, and the
-mesh size comes from the `FILAS` and `COLUMNAS` constants of `src/run_cgra.py`
-(see [Receive Inputs](01-receive-inputs.md)).
+CGRA (mesh size, memory size and the type of every PE) comes from
+`src/cgra.json` (see [Receive Inputs](01-receive-inputs.md)).
 
 The CGRA behaves like a processor: it is never told which operation it runs.
 The pipeline is the compiler. It turns the source into one program per PE
@@ -42,29 +42,35 @@ opt-18 -passes=dot-cfg <programa>.ll
 opt-18 -passes=dot-ddg <programa>.ll
 ```
 
-## Default Mesh
+## Default CGRA (`src/cgra.json`)
 
-`2x2` example; the mesh grows to any `filas x columnas` by extending the same
-grid, one `PE{fila}{columna}` per position, connected only to its north, south,
-east, and west neighbors:
-
-```text
-PE00 --east/west-- PE01
- |                 |
-north/south        north/south
- |                 |
-PE10 --east/west-- PE11
-```
-
-## Default Instruction Set
+`4x4` mesh, one `PE{fila}{columna}` per position, connected only to its north,
+south, east, and west neighbors. The west and east columns are **memory PEs**
+and the rest are **compute PEs**:
 
 ```text
-MOV  reg, imm
-LD   reg, mem[index]
-ST   mem[index], reg
-ADD  dst, src1, src2
-MUL  dst, src1, src2
-SEND dir, reg
-RECV dir, reg
-NOP
+PE00 (M) - PE01 (C) - PE02 (C) - PE03 (M)
+PE10 (M) - PE11 (C) - PE12 (C) - PE13 (M)
+PE20 (M) - PE21 (C) - PE22 (C) - PE23 (M)
+PE30 (M) - PE31 (C) - PE32 (C) - PE33 (M)
 ```
+
+## Instruction Set per PE Type
+
+```text
+                       memoria (M)   computo (C)
+MOV  reg, imm               x             x
+LD   reg, mem[index]        x
+ST   mem[index], reg        x
+ADD  dst, src1, src2                      x
+SUB  dst, src1, src2                      x
+MUL  dst, src1, src2                      x
+DIV  dst, src1, src2                      x
+SEND dir, reg               x             x
+RECV dir, reg               x             x
+NOP                         x             x
+```
+
+Memory PEs load operands and send them to the compute PEs; compute PEs compute
+and send their results back to be stored (skills 05-07). `run_cgra.py` refuses
+to load a program with an instruction outside the type of its PE.

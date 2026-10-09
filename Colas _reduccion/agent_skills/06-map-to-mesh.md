@@ -2,22 +2,29 @@
 
 ## Purpose
 
-Assign the work units and any reduction communication to the PEs of a
-`filas x columnas` mesh. The size comes from the manifest; `2x2` below is only
-an example.
+Assign the work units and the communication between PEs to a `filas x columnas`
+mesh whose PEs have **types** (see [Receive Inputs](01-receive-inputs.md)). The
+size and the type map come from `src/cgra.json`; the `4x4` below is the default
+file, used as the example.
 
 ## Mesh
 
 ```text
-PE00 --east/west-- PE01
- |                 |
-north/south        north/south
- |                 |
-PE10 --east/west-- PE11
+        col 0      col 1      col 2      col 3
+row 0   PE00 (M) - PE01 (C) - PE02 (C) - PE03 (M)
+         |          |          |          |
+row 1   PE10 (M) - PE11 (C) - PE12 (C) - PE13 (M)
+         |          |          |          |
+row 2   PE20 (M) - PE21 (C) - PE22 (C) - PE23 (M)
+         |          |          |          |
+row 3   PE30 (M) - PE31 (C) - PE32 (C) - PE33 (M)
+
+M = memoria: LD, ST, SEND, RECV, MOV, NOP      (moves data, never computes)
+C = computo: ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP   (never touches memory)
 ```
 
-The same layout extends to any size: `PE{fila}{columna}` sits at row `fila`,
-column `columna`, connected only to its north, south, east, and west neighbors.
+`PE{fila}{columna}` is connected only to its north, south, east, and west
+neighbors. Every PE, of either type, can `SEND`/`RECV` to any neighbor.
 
 ## PE Identifiers
 
@@ -32,102 +39,121 @@ fewer than 10 rows and columns -> one digit each:  PE00, PE12, PE77
 
 Never write `PE10` in a mesh of 10 or more, where it would be ambiguous.
 
-## Reduccion: Assignment
+## The Two Rules of the Types
 
-For `N` iterations and `P = filas * columnas` PEs, iteration `i` goes to:
+1. **All arithmetic runs on compute PEs.** A memory PE never emits `ADD`,
+   `SUB`, `MUL` or `DIV`.
+2. **All memory accesses run on memory PEs.** A compute PE never emits `LD` or
+   `ST`. Every value a compute PE uses arrives with `RECV`, and every value it
+   produces for memory leaves with `SEND`.
+
+## Server of Each Compute PE
+
+Each compute PE is served by the **nearest memory PE in its own row** (on a tie,
+the west one). The server loads the operands of that compute PE, sends them to
+it, receives its results and stores them.
 
 ```text
-pe_index = i mod P
-fila     = pe_index // columnas
-columna  = pe_index mod columnas
+direction to the compute PE  = east if the server is to the west, else west
+direction back to the server = the opposite one
 ```
 
-With `filas=2, columnas=2` this is `0 -> PE00, 1 -> PE01, 2 -> PE10,
-3 -> PE11`, so PE00 handles `a[0], a[4], a[8], ...`.
+With the default file every compute PE is right next to its server, and every
+memory PE serves exactly one compute PE:
 
-Use this single rule; do not switch to contiguous chunks. When `N` is larger
-than `P`, each PE simply gets `ceil(N / P)` iterations of that interleaved
-sequence, accumulates them locally, and only then runs the reduction route once.
-That is the tiling strategy for a reduction: the tile is the local chunk each PE
-reduces before the single mesh-wide reduction.
+```text
+PE(f,1) <- server PE(f,0), operands go east, results come back west
+PE(f,2) <- server PE(f,3), operands go west, results come back east
+```
+
+If a CGRA has a compute PE at distance `d > 1` from its server, the value
+crosses the compute PEs in between one hop per cycle; they relay it through
+`rT` (`RECV` then `SEND` on the next cycle). If a memory PE serves several
+compute PEs, it serves them one after another. A row with no memory PE cannot
+be used: stop and tell the user (skill 01).
+
+## Reduccion: Assignment
+
+Number the compute PEs in row-major order (`P_c` of them). Iteration `i` goes
+to compute PE number `i mod P_c`:
+
+```text
+4x4 default: 0 -> PE01, 1 -> PE02, 2 -> PE11, 3 -> PE12,
+             4 -> PE21, 5 -> PE22, 6 -> PE31, 7 -> PE32, 8 -> PE01, ...
+```
+
+Use this single rule; do not switch to contiguous chunks. For iteration `i`,
+the server of that compute PE loads `a[i]` and `b[i]`, the compute PE adds them
+and accumulates the sum in `acc`, and the server stores `c[i]`. When `N` is
+larger than `P_c`, each compute PE gets `ceil(N / P_c)` or `floor(N / P_c)`
+iterations of that interleaved sequence.
 
 ## Reduccion: Reduction Route
 
-Reduce in two generalized passes:
+Only compute PEs hold partial sums, so the route runs over the compute block
+and ends in a memory PE:
 
 ```text
-1. Row reduction: in every row, reduce the columns toward column 0
-   (successive SEND west / RECV east hops, all rows at the same time).
-2. Column reduction: reduce column 0 up to PE00
-   (successive SEND north / RECV south hops).
+1. Row reduction: in every row, reduce the compute columns toward the westmost
+   compute column (SEND west / RECV east hops, all rows at the same time).
+2. Column reduction: reduce that column up to row 0
+   (SEND north / RECV south hops).
+3. Store: the compute PE at row 0 sends the total to its server, which stores
+   result[0].
 ```
 
-With `filas=2, columnas=2` this is exactly `PE01 -> PE00`, `PE11 -> PE10`, then
-`PE10 -> PE00`. For a larger mesh, add one hop per extra column and per extra
-row, in the same directions; do not invent new communication patterns. The final
-result lives in `PE00`, which stores it.
+With the default file this is `PE02 -> PE01`, `PE12 -> PE11`, `PE22 -> PE21`,
+`PE32 -> PE31`; then `PE31 -> PE21 -> PE11 -> PE01`; then `PE01 -> PE00`, and
+`PE00` stores `result[0]`. For a larger mesh, add one hop per extra compute
+column and per extra row, in the same directions.
 
 ## Matmul and Convolucion: Output Tiles
 
-One PE per output element, with the mesh sliding over the output in tiles of
-`tile_filas x tile_columnas` (the mesh size by default). For every tile starting
-at `(inicio_fila, inicio_columna)`, the PE at `(fila, columna)` owns:
+One compute PE per output element, with the **compute block** sliding over the
+output in tiles of `tile_filas x tile_columnas` (the compute block of the
+manifest; `4 x 2` with the default file). Number the compute PEs inside the
+block by `(bf, bc)`, from 0. For every tile starting at
+`(inicio_fila, inicio_columna)`, the compute PE at block position `(bf, bc)`
+owns:
 
 ```text
-global_fila    = inicio_fila + fila
-global_columna = inicio_columna + columna
+global_fila    = inicio_fila + bf
+global_columna = inicio_columna + bc
 ```
 
-An operand that several PEs share is not read from memory by each of them: it
-enters the mesh once and then travels from neighbor to neighbor, one hop per
-cycle, with `SEND`/`RECV`. Only the PE that brings a value in touches memory.
+With the default file `bc = 0` is column 1 and `bc = 1` is column 2. A `9x9`
+output needs `ceil(9/4) * ceil(9/2) = 3 * 5 = 15` tiles.
 
-### Matmul
+### Operands of Each Step
 
-With `N = TAMANO_MATRIZ`, one step of the accumulation over `k` moves two
-values, each along the direction where it is shared:
+The accumulation is split into steps (`k` in matmul, every `(ki, kj)` of the
+window in convolucion). In every step, the server loads the two operands of
+**its** compute PE and sends them:
 
 ```text
-a[global_fila * N + k]    is the same for the whole row    -> enters at column 0,
-                                                              travels east
-b[k * N + global_columna] is the same for the whole column -> enters at row 0,
-                                                              travels south
+matmul       (N = TAMANO_MATRIZ)
+  rA <- a[global_fila * N + k]
+  rB <- b[k * N + global_columna]
+
+convolucion  (I = image side, K = kernel side, S = I - K + 1)
+  rA <- imagen[(global_fila + ki) * I + global_columna + kj]
+  rB <- kernel[ki * K + kj]
 ```
 
-Per `k`:
-
-1. `PE(fila, 0)` loads `a[global_fila * N + k]` into `rA`.
-2. That value crosses the row: `PE(fila, c)` emits `SEND east, rA` while
-   `PE(fila, c + 1)` emits `RECV west, rA`, for `c = 0 .. columnas - 2`.
-3. `PE(0, columna)` loads `b[k * N + global_columna]` into `rB`.
-4. That value crosses the column: `SEND south, rB` / `RECV north, rB`, for
-   `f = 0 .. filas - 2`.
-5. Every PE of the tile computes `MUL rC, rA, rB` and `ADD acc, acc, rC`.
-
-### Convolucion
-
-With image side `I`, kernel side `K` and output side `S = I - K + 1`, the
-kernel coefficient is shared by the whole mesh, while each PE needs its own
-pixel:
-
-```text
-kernel[ki * K + kj]                              -> enters at PE(0,0), travels
-                                                    east along row 0 and then
-                                                    south down every column
-imagen[(global_fila + ki) * I + global_columna + kj]
-                                                 -> each PE loads its own pixel
-```
-
-Per `(ki, kj)` step: the coefficient travels, every PE loads its pixel with
-`LD rA`, and both are combined with `MUL` and `ADD`.
+An operand shared by a row (`a` in matmul) or by the whole tile (`kernel`) is
+loaded by every memory PE that needs it, once per memory PE: with memory on both
+sides, each memory PE loading it for its own compute PE is cheaper than relaying
+it through compute PEs that are busy computing. When a memory PE serves several
+compute PEs, it loads a shared operand once and sends it to all of them.
 
 ### Stores
 
-After the last step of the tile, every PE stores its element:
+After the last step of the tile, every compute PE sends `acc` to its server,
+which stores it:
 
 ```text
-ST result[global_fila * N + global_columna], acc          (matmul)
-ST result[global_fila * S + global_columna], acc          (convolucion)
+ST result[global_fila * N + global_columna], rC          (matmul)
+ST result[global_fila * S + global_columna], rC          (convolucion)
 ```
 
 Walk the output tile by tile, row of tiles first, and restart the accumulators
@@ -135,22 +161,24 @@ on every tile.
 
 ## Sizes That Do Not Match the Mesh
 
-- **Output larger than the mesh:** that is the tiling above. The number of tiles
-  is `ceil(salida_filas / filas) * ceil(salida_columnas / columnas)`.
-- **Edge tiles:** when the output is not a multiple of the mesh, the PEs whose
-  `global_fila` or `global_columna` falls outside the output have nothing to do
-  in that tile and emit `NOP`. Every output element must still be assigned
-  exactly once.
-- **Mesh larger than the problem:** the extra PEs stay in `NOP`. In a reduction
-  they still execute `MOV acc, 0.0` at the start, so they contribute a neutral
-  value and the reduction route above stays the same.
+- **Output larger than the compute block:** that is the tiling above. The number
+  of tiles is `ceil(salida_filas / tile_filas) * ceil(salida_columnas / tile_columnas)`.
+- **Edge tiles:** when the output is not a multiple of the block, the compute
+  PEs whose `global_fila` or `global_columna` falls outside the output have
+  nothing to do in that tile and emit `NOP`, and so does their server. Every
+  output element must still be assigned exactly once.
+- **Mesh larger than the problem:** the extra compute PEs stay in `NOP`. In a
+  reduction they still execute `MOV acc, 0.0` at the start, so they contribute
+  a neutral value and the reduction route above stays the same.
 
 ## Outputs
 
 ```text
-PE{fila}{columna} work list   (one per PE in the mesh)
-tile list                     (for matmul and convolucion)
-communication edges           (reduction route, or travelling operands)
+server of every compute PE      (memory PE and direction)
+work list per compute PE        (iterations, or output elements per tile)
+memory list per memory PE       (LD/ST it performs for its compute PEs)
+tile list                       (for matmul and convolucion)
+communication edges             (operand delivery, results, reduction route)
 ```
 
 ## Notes

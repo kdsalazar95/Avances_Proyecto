@@ -19,6 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_pe_malla  # el archivo de pruebas normal, sin tocarlo
 import test_run_cgra
 import test_resultados
+import test_programas
+import test_cargador
+import test_formato_cgra
 
 
 # Nombres de sección más amigables para cada clase de prueba.
@@ -30,6 +33,10 @@ NOMBRES_DE_SECCION = {
     "TestEstadisticasCiclos": "Ciclos de cómputo vs comunicación",
     "TestMemoriaBinaria": "Memoria binaria de la CGRA (memoria.bin)",
     "TestPresentacionResultado": "Presentación del resultado desde la memoria",
+    "TestFormatoCGRA": "Formato de la CGRA y tipos de PE (cgra.json)",
+    "TestCargador": "Arranque de la CGRA y cargador (memoria en blanco)",
+    "TestProgramasCompilados": "Programas compilados (resultado igual al .c)",
+    "TestProgramas2x2": "Programas compilados en una CGRA 2x2 (M C / M C)",
 }
 
 
@@ -78,6 +85,10 @@ class ResultadoAmigable(unittest.TextTestResult):
         self.fallidas.append(test)
         print(f"  \u2716  {self._descripcion(test)}")
 
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        print(f"  -  {self._descripcion(test)}  (omitida: {reason})")
+
     def addError(self, test, err):
         super().addError(test, err)
         self.fallidas.append(test)
@@ -98,6 +109,10 @@ def main():
         test_run_cgra.TestEstadisticasCiclos,
         test_resultados.TestMemoriaBinaria,
         test_resultados.TestPresentacionResultado,
+        test_formato_cgra.TestFormatoCGRA,
+        test_cargador.TestCargador,
+        test_programas.TestProgramasCompilados,
+        test_programas.TestProgramas2x2,
     ]
     suite = unittest.TestSuite()
     for clase in orden_de_clases:

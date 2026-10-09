@@ -3,8 +3,8 @@
 import re
 from pathlib import Path
 
-from formato_texto import fmt, formato_pe, imprimir_titulo
-from pe_malla import PE, crear_malla, conectar_malla
+from formato_texto import fmt, imprimir_titulo
+from pe_malla import crear_malla, conectar_malla
 
 
 DIRECCIONES_OPUESTAS = {"north": "south", "south": "north", "east": "west", "west": "east"}
@@ -218,54 +218,83 @@ def validar_programas(programas, filas, columnas):
 #               ↓
 #         Programa válido
 
-def ejecutar_cgra(memoria, programas, filas, columnas, mostrar_pasos=False):
+def texto_instruccion(instruccion):
+    """Vuelve a escribir una instrucción ya parseada con la sintaxis del skill 08."""
+    op = instruccion["op"]
+    if op == "nop":
+        return "NOP"
+    if op == "mov":
+        return f"MOV {instruccion['dst']}, {fmt(instruccion['imm'])}"
+    if op == "ld":
+        return f"LD {instruccion['dst']}, {instruccion['bank']}[{instruccion['index']}]"
+    if op == "st":
+        return f"ST {instruccion['bank']}[{instruccion['index']}], {instruccion['src']}"
+    if op in {"add", "sub", "mul", "div"}:
+        return f"{op.upper()} {instruccion['dst']}, {instruccion['src1']}, {instruccion['src2']}"
+    if op == "send":
+        return f"SEND {instruccion['dir']}, {instruccion['src']}"
+    if op == "recv":
+        return f"RECV {instruccion['dir']}, {instruccion['dst']}"
+    return op.upper()
+
+
+def efecto_instruccion(pe, instruccion, memoria):
+    """Describe qué dejó la instrucción recién ejecutada: el registro o la
+    posición de memoria que escribió, o el valor que mandó a la cola."""
+    op = instruccion["op"]
+    if op == "st":
+        banco, indice = instruccion["bank"], instruccion["index"]
+        if "addr" in instruccion:
+            return f"{banco}[{indice}] = {fmt(memoria[instruccion['addr']])}  (dirección {instruccion['addr']})"
+        return f"{banco}[{indice}] = {fmt(memoria[banco][indice])}"
+    if op == "send":
+        return f"envía {fmt(pe._register[pe._indice_registro(instruccion['src'])])}"
+    if "dst" in instruccion:
+        return f"{instruccion['dst']} = {fmt(pe._register[pe._indice_registro(instruccion['dst'])])}"
+    return ""
+
+
+def ejecutar_cgra(memoria, programas, filas, columnas, mostrar_traza=False, malla=None):
     """Ejecuta una instrucción por PE y por ciclo; SEND se procesa primero.
 
-    Si ``mostrar_pasos`` es verdadero, imprime cada comunicación de la
-    reducción cuando su ADD receptor ya se ejecutó en el ciclo siguiente.
+    La CGRA no sabe qué operación corre: solo ejecuta las instrucciones de
+    cada PE. Si ``mostrar_traza`` es verdadero, imprime en cada ciclo qué
+    ejecutó cada PE (sin los NOP) y qué dejó en registros o memoria.
+
+    ``malla`` es la de una CGRA ya cargada (ver cargador.py); si no se da,
+    se crea una malla nueva.
     """
-    malla = crear_malla(filas, columnas)
-    conectar_malla(malla)
+    if malla is None:
+        malla = crear_malla(filas, columnas)
+        conectar_malla(malla)
     pe_ids = generar_pe_ids(filas, columnas)
     pes = {}
     for pe_id in pe_ids:
         fila, columna = descomponer_pe_id(pe_id)
         pes[pe_id] = malla[fila][columna]
 
-    pasos_pendientes = []
-    numero_paso = 1
+    if mostrar_traza:
+        imprimir_titulo("TRAZA: ciclo | PE | instrucción | efecto")
     for ciclo in sorted(next(iter(programas.values()))):
         instrucciones_del_ciclo = {pe_id: programas[pe_id][ciclo] for pe_id in pe_ids}
+        efectos = {}
 
         # Primero todos los SEND, para que el RECV del vecino encuentre el
         # dato en la cola dentro del mismo ciclo.
         for pe_id, instruccion in instrucciones_del_ciclo.items():
-            if instruccion["op"] != "send":
-                continue
-            if mostrar_pasos and instruccion["src"] == "acc":
-                receptor = vecino(pe_id, instruccion["dir"], filas, columnas)
-                pasos_pendientes.append({
-                    "ciclo_resultado": ciclo + 1,
-                    "emisor": pe_id,
-                    "receptor": receptor,
-                    "direccion": instruccion["dir"],
-                    "antes": pes[receptor]._register[PE.REGISTROS["acc"]],
-                    "enviado": pes[pe_id]._register[PE.REGISTROS["acc"]],
-                })
-            pes[pe_id].execute(instruccion, memoria)
+            if instruccion["op"] == "send":
+                pes[pe_id].execute(instruccion, memoria)
+                efectos[pe_id] = efecto_instruccion(pes[pe_id], instruccion, memoria)
         for pe_id, instruccion in instrucciones_del_ciclo.items():
             if instruccion["op"] != "send":
                 pes[pe_id].execute(instruccion, memoria)
+                efectos[pe_id] = efecto_instruccion(pes[pe_id], instruccion, memoria)
 
-        for paso in [paso for paso in pasos_pendientes if paso["ciclo_resultado"] == ciclo]:
-            resultado = pes[paso["receptor"]]._register[PE.REGISTROS["acc"]]
-            imprimir_titulo(f"PASO {numero_paso}: reduciendo en la malla")
-            print(
-                f"  {formato_pe(paso['emisor'])} -> {formato_pe(paso['receptor'])} "
-                f"({DIRECCIONES_EN_ESPANOL[paso['direccion']]})   "
-                f"{fmt(paso['antes'])} + {fmt(paso['enviado'])} = {fmt(resultado)}"
-            )
-            numero_paso += 1
+        if mostrar_traza:
+            for pe_id in pe_ids:
+                instruccion = instrucciones_del_ciclo[pe_id]
+                if instruccion["op"] != "nop":
+                    print(f"  {ciclo:>5} | {pe_id} | {texto_instruccion(instruccion):<22} | {efectos[pe_id]}")
     return malla
 
 # Flujo de la funcion:

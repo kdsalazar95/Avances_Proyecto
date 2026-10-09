@@ -52,6 +52,10 @@ class PE:
         (fila, columna) que indica su posición en la malla).
         """
         self.id = pe_id
+        # Tipo del PE (ver formato_cgra.py) y las instrucciones que su
+        # hardware puede ejecutar. None = sin restricción (PE genérico).
+        self.tipo = None
+        self.instrucciones_permitidas = None
         self._register = [0] * 16
         self._pc = 0
         self._instructions = []
@@ -125,6 +129,11 @@ class PE:
         comunicación funciona en las 4 direcciones y en ambos sentidos.
         """
         op = inst["op"].lower()
+        if self.instrucciones_permitidas is not None:
+            # send_e/recv_w del formato antiguo cuentan como SEND/RECV.
+            base = op.split("_")[0]
+            if base not in self.instrucciones_permitidas:
+                raise RuntimeError(f"PE{self.id} es de tipo {self.tipo} y no puede ejecutar {base.upper()}")
 
         # El formato antiguo usa regA/regB/regC. El parser del ISA textual
         # utiliza dst/src1/src2 para reflejar la sintaxis ADD dst, src1, src2.
@@ -134,6 +143,13 @@ class PE:
         def banco_e_indice():
             if memoria is None:
                 raise RuntimeError(f"{op.upper()} requiere memoria compartida")
+            # Con la CGRA cargada, el cargador ya resolvió a[3] a una
+            # dirección de la memoria plana (ver cargador.py).
+            if "addr" in inst:
+                direccion = inst["addr"]
+                if not 0 <= direccion < len(memoria):
+                    raise IndexError(f"Dirección fuera de la memoria: {direccion}")
+                return None, direccion
             banco = inst["bank"]
             indice = inst["index"]
             if banco not in memoria:
@@ -154,10 +170,12 @@ class PE:
             self._register[reg("regC", "dst")] = inst["imm"]
         elif op == "ld":
             banco, indice = banco_e_indice()
-            self._register[reg(None, "dst")] = memoria[banco][indice]
+            celdas = memoria if banco is None else memoria[banco]
+            self._register[reg(None, "dst")] = celdas[indice]
         elif op == "st":
             banco, indice = banco_e_indice()
-            memoria[banco][indice] = self._register[reg(None, "src")]
+            celdas = memoria if banco is None else memoria[banco]
+            celdas[indice] = self._register[reg(None, "src")]
         elif op == "nop":
             pass
         # --- enviar datos a un vecino ---
