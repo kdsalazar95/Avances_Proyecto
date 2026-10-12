@@ -1,2 +1,0 @@
-## Instruciones para LLVM
-

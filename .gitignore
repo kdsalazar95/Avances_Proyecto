@@ -10,8 +10,8 @@ progreso_entrenamiento.png
 .pytest_cache/
 
 # Todo lo que generan los skills y run_cgra.py: IR, graficas, horarios de los
-# PEs, memorias y reportes. En el repositorio solo queda el codigo fuente
-# (.py, .c) y la documentacion (.md).
+# PEs, memorias y reportes (en cgra/programas/). En el repositorio solo queda
+# el codigo fuente (.py, .c, .h) y la documentacion (.md).
 *.ll
 *.dot
 *.json
@@ -22,5 +22,9 @@ pe_instructions/
 graphs/
 **/programas/*
 
-# Excepcion: el horario de referencia 2x2 que usan las pruebas
+# Excepciones: el formato de la CGRA (lo leen Python y los skills) y los
+# datos de prueba
+!**/src/cgra.json
 !**/test/datos/**
+# ...pero los .txt de test/datos no se suben
+**/test/datos/**/*.txt
