@@ -7,19 +7,20 @@ ejecuta ``PE.ejecutar()`` (``{"op": "add", "dst": "rC", ...}``).
 
 import re
 
+from formato_numero import formatear_numero
+
 PATRON_MEMORIA = re.compile(r"^([A-Za-z_]\w*)\[(\d+)\]$")  # a[3] -> ("a", 3)
 
 
 class ISA:
     """Instrucciones y registros de un PE."""
 
-    INSTRUCCIONES = ("NOP", "MOV", "LD", "ST", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV")
-
     # Cada PE tiene 16 registros; estos son los que tienen nombre.
     CANTIDAD_REGISTROS = 16
     REGISTROS = {"rA": 0, "rB": 1, "rC": 2, "rT": 3, "acc": 4}
 
-    DIRECCIONES = ("north", "south", "east", "west")
+    ARITMETICAS = frozenset({"add", "sub", "mul", "div"})
+    COMUNICACION = frozenset({"send", "recv"})
 
     @staticmethod
     def parsear(texto, origen="instrucción"):
@@ -43,7 +44,7 @@ class ISA:
         if op == "ST" and len(argumentos) == 2:
             banco, indice = ISA._operando_memoria(argumentos[0], origen)
             return {"op": "st", "bank": banco, "index": indice, "src": argumentos[1]}
-        if op in {"ADD", "SUB", "MUL", "DIV"} and len(argumentos) == 3:
+        if op.lower() in ISA.ARITMETICAS and len(argumentos) == 3:
             return {"op": op.lower(), "dst": argumentos[0], "src1": argumentos[1], "src2": argumentos[2]}
         if op == "SEND" and len(argumentos) == 2:
             return {"op": "send", "dir": argumentos[0].lower(), "src": argumentos[1]}
@@ -58,12 +59,12 @@ class ISA:
         if op == "nop":
             return "NOP"
         if op == "mov":
-            return f"MOV {instruccion['dst']}, {ISA._formato_constante(instruccion['imm'])}"
+            return f"MOV {instruccion['dst']}, {formatear_numero(instruccion['imm'])}"
         if op == "ld":
             return f"LD {instruccion['dst']}, {instruccion['bank']}[{instruccion['index']}]"
         if op == "st":
             return f"ST {instruccion['bank']}[{instruccion['index']}], {instruccion['src']}"
-        if op in {"add", "sub", "mul", "div"}:
+        if op in ISA.ARITMETICAS:
             return f"{op.upper()} {instruccion['dst']}, {instruccion['src1']}, {instruccion['src2']}"
         if op == "send":
             return f"SEND {instruccion['dir']}, {instruccion['src']}"
@@ -84,13 +85,8 @@ class ISA:
 
     @staticmethod
     def _constante(texto):
-        """La constante de un MOV: ``5`` -> 5, ``0.5`` -> 0.5, ``0.0`` -> 0."""
-        valor = float(texto)
-        return int(valor) if valor.is_integer() else valor
-
-    @staticmethod
-    def _formato_constante(valor):
-        return f"{round(valor, 6):g}" if isinstance(valor, (int, float)) else str(valor)
+        """La constante de un MOV convertida a float."""
+        return float(texto)
 
     @staticmethod
     def _operando_memoria(texto, origen):

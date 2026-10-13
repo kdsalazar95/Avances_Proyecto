@@ -42,7 +42,7 @@ class TestFormatoCGRA(unittest.TestCase):
         cgra = CGRA(FormatoCGRA.cargar(self.escribir_json()))
 
         self.assertEqual((cgra.filas, cgra.columnas), (2, 3))
-        self.assertEqual(len(cgra.malla.pes()), 6)
+        self.assertEqual(len(cgra.malla.ids()), 6)
         self.assertEqual(cgra.malla.ids(), ("PE00", "PE01", "PE02", "PE10", "PE11", "PE12"))
         self.assertEqual(len(cgra.memoria), 16)
 

@@ -9,10 +9,11 @@ los datos que van y los que vienen nunca se mezclen.
 import operator
 
 from isa import ISA
+from topologia import DIRECCIONES, DESPLAZAMIENTO, OPUESTA
 
 ARITMETICA = {"add": operator.add, "sub": operator.sub, "mul": operator.mul, "div": operator.truediv}
-OPUESTA = {"north": "south", "south": "north", "east": "west", "west": "east"}
-DESPLAZAMIENTO = {"north": (-1, 0), "south": (1, 0), "west": (0, -1), "east": (0, 1)}
+if ARITMETICA.keys() != ISA.ARITMETICAS:
+    raise RuntimeError("Las operaciones aritméticas de la ISA y la malla no coinciden")
 
 
 class Cola:
@@ -40,8 +41,8 @@ class PE:
         self.id = pe_id
         self.registros = [0] * ISA.CANTIDAD_REGISTROS
         # Una cola por dirección; None si no hay vecino de ese lado.
-        self.salidas = dict.fromkeys(ISA.DIRECCIONES)
-        self.entradas = dict.fromkeys(ISA.DIRECCIONES)
+        self.salidas = dict.fromkeys(DIRECCIONES)
+        self.entradas = dict.fromkeys(DIRECCIONES)
 
     def leer_registro(self, registro):
         return self.registros[ISA.indice_registro(registro)]
@@ -129,9 +130,6 @@ class Malla:
     def pe(self, pe_id):
         fila, columna = self.posicion(pe_id)
         return self._pes[fila][columna]
-
-    def pes(self):
-        return [self.pe(pe_id) for pe_id in self.ids()]
 
     def vecino(self, pe_id, direccion):
         """ID del vecino de un PE en esa dirección."""

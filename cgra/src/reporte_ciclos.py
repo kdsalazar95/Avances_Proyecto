@@ -5,8 +5,10 @@ solo lee el ``Programa``."""
 from pathlib import Path
 
 from consola import Consola
+from isa import ISA
+from topologia import EN_ESPANOL
 
-EN_ESPANOL = {"north": "norte", "south": "sur", "west": "oeste", "east": "este"}
+TITULO_REPORTE = "CICLOS: cómputo vs comunicación"
 
 
 class ReporteCiclos:
@@ -30,7 +32,7 @@ class ReporteCiclos:
         ciclos = self.programa.ciclos()
         for ciclo in ciclos:
             operaciones = [instruccion["op"] for instruccion in self.programa.del_ciclo(ciclo).values()]
-            if any(op in {"send", "recv"} for op in operaciones):
+            if any(op in ISA.COMUNICACION for op in operaciones):
                 comunicacion += 1
             elif all(op == "nop" for op in operaciones):
                 inactivo += 1
@@ -90,10 +92,10 @@ class ReporteCiclos:
         return lineas
 
     def mostrar(self):
-        Consola.titulo("CICLOS: cómputo vs comunicación")
+        Consola.titulo(TITULO_REPORTE)
         Consola.caja(self.lineas())
 
     def guardar(self, ruta):
         """Guarda el reporte en un archivo de texto."""
-        contenido = ["CICLOS: cómputo vs comunicación", ""] + self.lineas()
+        contenido = [TITULO_REPORTE, ""] + self.lineas()
         Path(ruta).write_text("\n".join(contenido) + "\n", encoding="utf-8")

@@ -50,8 +50,6 @@ class ResultadoAmigable(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.seccion_actual = None
-        self.exitosas = 0
-        self.fallidas = []
 
     def _descripcion(self, test):
         # Junta todas las líneas del docstring en una sola oración
@@ -78,12 +76,10 @@ class ResultadoAmigable(unittest.TextTestResult):
 
     def addSuccess(self, test):
         super().addSuccess(test)
-        self.exitosas += 1
         print(f"  \u2714  {self._descripcion(test)}")
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
-        self.fallidas.append(test)
         print(f"  \u2716  {self._descripcion(test)}")
 
     def addSkip(self, test, reason):
@@ -92,7 +88,6 @@ class ResultadoAmigable(unittest.TextTestResult):
 
     def addError(self, test, err):
         super().addError(test, err)
-        self.fallidas.append(test)
         print(f"  \u2716  {self._descripcion(test)}  (error inesperado)")
 
 

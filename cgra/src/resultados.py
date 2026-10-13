@@ -8,6 +8,7 @@ vector o una matriz).
 """
 
 from consola import Consola
+from formato_numero import formatear_numero
 
 
 class Resultados:
@@ -37,7 +38,7 @@ class Resultados:
     def _mostrar_region(nombre, valores, filas, columnas):
         if filas * columnas == 1:
             Consola.titulo(f"RESULTADO: {nombre}")
-            Consola.caja([f"{nombre} = {Consola.numero(valores[0])}"])
+            Consola.caja([f"{nombre} = {formatear_numero(valores[0])}"])
         elif filas == 1 or columnas == 1:
             Consola.vector(nombre, valores)
         else:

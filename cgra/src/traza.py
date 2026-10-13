@@ -3,6 +3,7 @@ y qué dejó escrito. La CGRA la llena mientras ejecuta; no depende de qué
 operación se está corriendo."""
 
 from consola import Consola
+from formato_numero import formatear_numero
 from isa import ISA
 
 
@@ -32,11 +33,11 @@ class Traza:
         if op == "st":
             direccion = instruccion["addr"]
             return (f"{instruccion['bank']}[{instruccion['index']}] = "
-                    f"{Consola.numero(memoria[direccion])}  (dirección {direccion})")
+                    f"{formatear_numero(memoria[direccion])}  (dirección {direccion})")
         if op == "send":
-            return f"envía {Consola.numero(pe.leer_registro(instruccion['src']))}"
+            return f"envía {formatear_numero(pe.leer_registro(instruccion['src']))}"
         if "dst" in instruccion:
-            return f"{instruccion['dst']} = {Consola.numero(pe.leer_registro(instruccion['dst']))}"
+            return f"{instruccion['dst']} = {formatear_numero(pe.leer_registro(instruccion['dst']))}"
         return ""
 
     def lineas(self):

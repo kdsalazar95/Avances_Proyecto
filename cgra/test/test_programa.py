@@ -15,6 +15,7 @@ from cargador import Cargador
 from cgra import CGRA
 from datos_prueba import escribir_reduccion_2x2
 from formato_cgra import FormatoCGRA
+from isa import ISA
 from malla import Malla
 from programa import Programa
 from reporte_ciclos import ReporteCiclos
@@ -39,7 +40,7 @@ class TestEjecucionCGRA(ConReduccion2x2):
         """Los cuatro archivos deben cargar y cubrir los mismos 24 ciclos."""
         programa = Programa.leer(self.ruta_instrucciones, self.malla)
 
-        self.assertEqual(set(programa.pe_ids()), {"PE00", "PE01", "PE10", "PE11"})
+        self.assertEqual(set(programa.instrucciones), {"PE00", "PE01", "PE10", "PE11"})
         self.assertEqual(programa.ciclos(), list(range(24)))
 
     def test_2_ejecuta_mapa_y_reduccion_hasta_resultado_final(self):
@@ -78,9 +79,9 @@ class TestEstadisticasCiclos(ConReduccion2x2):
     def sin_comunicacion(self):
         """Una copia del programa con los SEND/RECV cambiados por NOP."""
         programa = copy.deepcopy(self.programa)
-        for pe_id in programa.pe_ids():
+        for pe_id in programa.instrucciones:
             for ciclo, instruccion in programa[pe_id].items():
-                if instruccion["op"] in {"send", "recv"}:
+                if instruccion["op"] in ISA.COMUNICACION:
                     programa[pe_id][ciclo] = {"op": "nop"}
         return programa
 
@@ -92,7 +93,7 @@ class TestEstadisticasCiclos(ConReduccion2x2):
 
     def test_2_un_ciclo_totalmente_nop_cuenta_como_inactivo(self):
         """Si todos los PEs hacen NOP en un ciclo, ese ciclo debe contar como inactivo y no como cómputo."""
-        for pe_id in self.programa.pe_ids():
+        for pe_id in self.programa.instrucciones:
             self.programa[pe_id][0] = {"op": "nop"}
 
         estadisticas = ReporteCiclos(self.programa, self.malla).contar()

@@ -26,9 +26,23 @@ CABECERA = struct.Struct("<8sII")
 SIMBOLO = struct.Struct("<16sIII")
 
 
-def _numero(valor):
-    """Deja como int los floats enteros, como hace ``MOV`` con sus constantes."""
-    return int(valor) if valor.is_integer() else valor
+def _extraer_region(palabras, simbolo):
+    """Copia los valores de una región según su símbolo."""
+    direccion, filas, columnas = simbolo
+    return palabras[direccion:direccion + filas * columnas]
+
+
+def _extraer_regiones(palabras, simbolos):
+    """Obtiene los valores y las formas a partir de palabras y símbolos."""
+    regiones = {
+        nombre: _extraer_region(palabras, simbolo)
+        for nombre, simbolo in simbolos.items()
+    }
+    formas = {
+        nombre: (filas, columnas)
+        for nombre, (_, filas, columnas) in simbolos.items()
+    }
+    return regiones, formas
 
 
 class ImagenMemoria:
@@ -57,7 +71,7 @@ class ImagenMemoria:
         if len(datos) != esperado:
             raise ValueError(f"{ruta}: se esperaban {esperado} bytes y tiene {len(datos)}")
 
-        valores = [_numero(valor) for valor in struct.unpack_from(f"<{palabras}f", datos, inicio_datos)]
+        valores = list(struct.unpack_from(f"<{palabras}f", datos, inicio_datos))
         simbolos = {}
         for r in range(cantidad):
             nombre, direccion, filas, columnas = SIMBOLO.unpack_from(datos, CABECERA.size + r * SIMBOLO.size)
@@ -93,9 +107,7 @@ class ImagenMemoria:
 
     def regiones(self):
         """``(regiones, formas)``: los valores y la forma de cada región."""
-        regiones = {nombre: self.palabras[d:d + f * c] for nombre, (d, f, c) in self.simbolos.items()}
-        formas = {nombre: (f, c) for nombre, (_, f, c) in self.simbolos.items()}
-        return regiones, formas
+        return _extraer_regiones(self.palabras, self.simbolos)
 
 
 class Memoria:
@@ -129,11 +141,8 @@ class Memoria:
 
     def region(self, nombre):
         """Valores actuales de una región cargada."""
-        direccion, filas, columnas = self.simbolos[nombre]
-        return self.palabras[direccion:direccion + filas * columnas]
+        return _extraer_region(self.palabras, self.simbolos[nombre])
 
     def regiones(self):
         """``(regiones, formas)`` de todo lo cargado, en el orden de la imagen."""
-        regiones = {nombre: self.region(nombre) for nombre in self.simbolos}
-        formas = {nombre: (filas, columnas) for nombre, (_, filas, columnas) in self.simbolos.items()}
-        return regiones, formas
+        return _extraer_regiones(self.palabras, self.simbolos)

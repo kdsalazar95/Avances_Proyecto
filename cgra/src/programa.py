@@ -61,9 +61,6 @@ class Programa:
     def __getitem__(self, pe_id):
         return self.instrucciones[pe_id]
 
-    def pe_ids(self):
-        return list(self.instrucciones)
-
     def ciclos(self):
         """Los ciclos del programa, en orden (0, 1, 2, ...)."""
         return sorted(next(iter(self.instrucciones.values())))
@@ -84,7 +81,7 @@ class Programa:
         for ciclo in sorted(ciclos):
             del_ciclo = self.del_ciclo(ciclo)
             for pe_id, instruccion in del_ciclo.items():
-                if instruccion["op"] not in {"send", "recv"}:
+                if instruccion["op"] not in ISA.COMUNICACION:
                     continue
                 otro = malla.vecino(pe_id, instruccion["dir"])
                 esperada = "recv" if instruccion["op"] == "send" else "send"

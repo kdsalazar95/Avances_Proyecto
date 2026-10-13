@@ -1,28 +1,21 @@
-"""Presentación en la terminal: dar formato a números e imprimir títulos,
-cajas de texto y vectores. No tiene ninguna lógica propia de la CGRA."""
+"""Presentación en la terminal: imprimir títulos, cajas y datos."""
+
+from formato_numero import formatear_numero
 
 
 class Consola:
     """Funciones de impresión que comparten el simulador y sus reportes."""
 
     @staticmethod
-    def numero(valor):
-        """Da formato compacto a enteros y flotantes (``2.0`` -> ``2``)."""
-        return f"{round(valor, 6):g}" if isinstance(valor, (int, float)) else str(valor)
-
-    @staticmethod
     def lista(valores):
-        """``[1, 2, 3]`` con cada valor en formato compacto."""
-        return "[" + ", ".join(Consola.numero(valor) for valor in valores) + "]"
+        """Convierte una secuencia en una lista de texto."""
+        return "[" + ", ".join(formatear_numero(valor) for valor in valores) + "]"
 
     @staticmethod
     def titulo(texto):
         """Imprime un título dentro de una caja."""
-        ancho = len(texto) + 2
         print()
-        print("┌" + "─" * ancho + "┐")
-        print(f"│ {texto} │")
-        print("└" + "─" * ancho + "┘")
+        Consola.caja([texto])
 
     @staticmethod
     def caja(lineas):
@@ -42,7 +35,7 @@ class Consola:
         pueda leer y ubicar por posición.
         """
         Consola.titulo(f"{nombre}: {len(valores)} valores")
-        textos = [Consola.numero(valor) for valor in valores]
+        textos = [formatear_numero(valor) for valor in valores]
         ancho_valor = max([len(texto) for texto in textos] + [3])
         ancho_indice = len(str(max(len(valores) - 1, 0)))
         for inicio in range(0, len(textos), por_fila):

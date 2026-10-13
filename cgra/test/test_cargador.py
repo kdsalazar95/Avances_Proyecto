@@ -37,7 +37,8 @@ class TestCargador(unittest.TestCase):
 
         self.assertEqual(cgra.memoria.palabras, [0] * 64)
         self.assertEqual(cgra.memoria.simbolos, {})
-        for pe in cgra.malla.pes():
+        for pe_id in cgra.malla.ids():
+            pe = cgra.malla.pe(pe_id)
             self.assertEqual(pe.registros, [0] * 16)
 
     def test_2_copia_la_imagen_y_el_resto_queda_en_cero(self):
@@ -83,7 +84,7 @@ class TestCargador(unittest.TestCase):
         """Después de cargar debe haber un programa de 24 instrucciones por PE, y al ejecutar la reducción 2x2 debe quedar result = 60 en la memoria de la CGRA."""
         cgra = CGRA(FormatoCGRA(2, 2, 64))
         programa = Cargador(cgra).cargar(self.ruta_memoria, self.ruta_instrucciones)
-        self.assertEqual(set(programa.pe_ids()), set(cgra.malla.ids()))
+        self.assertEqual(set(programa.instrucciones), set(cgra.malla.ids()))
         self.assertEqual(len(programa.ciclos()), 24)
 
         cgra.ejecutar(programa)

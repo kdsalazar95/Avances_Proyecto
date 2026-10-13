@@ -29,8 +29,9 @@ from traza import Traza
 
 # Carpeta donde los skills dejan cada operación compilada, y la fuente C
 # cuya tabla OPERACIONES dice qué operaciones existen.
-CARPETA_PROGRAMAS = Path(__file__).resolve().parent.parent / "programas"
-FUENTE_OPERACIONES = Path(__file__).resolve().parent.parent / "operaciones" / "operaciones.c"
+RAIZ_CGRA = Path(__file__).resolve().parent.parent
+CARPETA_PROGRAMAS = RAIZ_CGRA / "programas"
+FUENTE_OPERACIONES = RAIZ_CGRA / "operaciones" / "operaciones.c"
 
 
 class SimuladorCGRA:
