@@ -36,7 +36,7 @@ programas/<operacion>/ddg.<operacion>..dot
 
 The passes write one graph per function of `operaciones.c`: also `main`, the
 other operations, every `inicializar_<operacion>`, `guardar_memoria` and
-`escribir`. Later skills only use the graphs of the requested operation; the
+`escribir`. Later skills only use the graphs of the operation being compiled; the
 others are other operations or describe how the initial memory is prepared,
 not work for the CGRA.
 

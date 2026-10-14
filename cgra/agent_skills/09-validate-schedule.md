@@ -20,19 +20,39 @@ respect mesh communication.
 7. Registers are defined before use.
 8. Stores occur only after their source values are computed.
 9. All loop iterations are scheduled exactly once.
-10. The final reduction result is stored by `PE00`, unless the user requested a
-    different output PE.
+10. The final reduction result is stored by the memory PE at the end of the
+    route of skill 06 (`PE00`), unless the user
+    requested a different output PE.
 11. Every `LD`/`ST` names a region of `memoria.bin` and stays inside its size.
     Read the regions from its symbol table (layout in `operaciones/memoria_cgra.h`), or
     load it with `ImagenMemoria.leer()` of `src/memoria.py`.
+12. Every PE only uses instructions of its type in `src/cgra.json`: no `LD`/`ST`
+    in a compute PE, no `ADD`/`SUB`/`MUL`/`DIV` in a memory PE.
+13. `memoria.bin` fits in `palabras_memoria` of `src/cgra.json`.
+
+Checks 1-6 and 11-13 are what `run_cgra.py` enforces when it loads the program;
+run them with the same code instead of re-implementing them:
+
+```sh
+cd src && python3 -c "
+from cargador import Cargador
+from cgra import CGRA
+from formato_cgra import FormatoCGRA
+Cargador(CGRA(FormatoCGRA.cargar())).cargar('../programas/<operacion>/memoria.bin', '../programas/<operacion>/pe_instructions')
+print('Carga valida')"
+```
+
+Then run `uv run src/run_cgra.py <operacion>` and compare the result with what
+`<operacion>()` of `operaciones/operaciones.c` computes (checks 7-10).
 
 ## Per Operation
 
-- **reduccion:** each PE accumulates its own values before the reduction route.
+- **reduccion:** each compute PE accumulates its own values before the
+  reduction route, and the final value is stored by a memory PE.
 - **matmul and convolucion:** every output element is stored exactly once, all
   tiles are processed, and the PEs outside the output in an edge tile only emit
-  `NOP`. Each value that travels reaches every PE of its row, column or the
-  whole mesh before the `MUL` that uses it.
+  `NOP`. Each operand reaches its compute PE, from that PE's server, before the
+  `MUL` that uses it.
 
 ## Output
 

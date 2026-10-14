@@ -22,6 +22,7 @@ instrucciones.
 
 from memoria import ImagenMemoria
 from programa import Programa
+from formato_cgra import validar_tipos
 
 
 class Cargador:
@@ -41,5 +42,6 @@ class Cargador:
         """Carga la imagen y devuelve el ``Programa`` ya enlazado."""
         self.cargar_imagen(ruta_memoria, base)
         programa = Programa.leer(ruta_instrucciones, self.cgra.malla)
+        validar_tipos(programa, self.cgra.formato)
         programa.enlazar(self.cgra.memoria.simbolos)
         return programa

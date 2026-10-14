@@ -39,6 +39,8 @@ class PE:
 
     def __init__(self, pe_id):
         self.id = pe_id
+        self.tipo = None
+        self.instrucciones_permitidas = None
         self.registros = [0] * ISA.CANTIDAD_REGISTROS
         # Una cola por dirección; None si no hay vecino de ese lado.
         self.salidas = dict.fromkeys(DIRECCIONES)
@@ -57,6 +59,8 @@ class PE:
         Los LD/ST usan la dirección ``addr`` que les asignó el cargador.
         """
         op = instruccion["op"]
+        if self.instrucciones_permitidas is not None and op not in self.instrucciones_permitidas:
+            raise RuntimeError(f"PE {self.id} es de tipo {self.tipo} y no puede ejecutar {op.upper()}")
         if op == "nop":
             return
         if op == "mov":

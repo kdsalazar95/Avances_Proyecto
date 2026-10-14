@@ -3,7 +3,8 @@
 ## Purpose
 
 Generate LLVM IR from `operaciones/operaciones.c`, and run it once for the
-requested operation to produce the initial memory of the CGRA, `memoria.bin`.
+operation being compiled (skill 01 runs the pipeline for every operation) to
+produce the initial memory of the CGRA, `memoria.bin`.
 
 ## Required Tool
 
@@ -76,4 +77,4 @@ scheduling. Do not hand-edit it before passing it to `opt-18`.
 The IR also contains `main`, the other operations, every
 `inicializar_<operacion>()` and the helpers from `memoria_cgra.h`
 (`guardar_memoria`, `escribir`). None of them is work for the CGRA: only the
-loops of the requested operation's function are scheduled.
+loops of the function of the operation being compiled are scheduled.

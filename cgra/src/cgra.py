@@ -19,6 +19,10 @@ class CGRA:
         """Crea la CGRA "en blanco" según su ``FormatoCGRA``."""
         self.formato = formato
         self.malla = Malla(formato.filas, formato.columnas)
+        for pe_id in self.malla.ids():
+            pe = self.malla.pe(pe_id)
+            pe.tipo = formato.nombre_tipo(pe_id)
+            pe.instrucciones_permitidas = formato.instrucciones(pe_id)
         self.memoria = Memoria(formato.palabras_memoria)
 
     @property

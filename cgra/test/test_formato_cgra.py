@@ -1,4 +1,4 @@
-"""Pruebas del formato de la CGRA (cgra.json): tamaño de la malla y de la memoria."""
+"""Pruebas del formato de la CGRA (cgra.json): tamaño de la malla, de la memoria y tipos de PE."""
 
 import json
 import os
@@ -10,11 +10,18 @@ _raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
 
 from cgra import CGRA
-from formato_cgra import FormatoCGRA
+from formato_cgra import FormatoCGRA, validar_tipos
+from programa import Programa
+
+
+TIPOS = {
+    "M": {"nombre": "memoria", "instrucciones": ["NOP", "LD", "ST"]},
+    "C": {"nombre": "computo", "instrucciones": ["NOP", "ADD"]},
+}
 
 
 class TestFormatoCGRA(unittest.TestCase):
-    """cgra.json describe el tamaño de la malla y de la memoria de datos."""
+    """cgra.json describe el tamaño de la malla, de la memoria de datos y el tipo de cada PE."""
 
     def setUp(self):
         self.directorio = tempfile.TemporaryDirectory()
@@ -78,6 +85,39 @@ class TestFormatoCGRA(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "JSON inválido"):
             FormatoCGRA.cargar(ruta)
 
+    def test_6_asigna_tipo_e_instrucciones_a_cada_pe(self):
+        """Con una malla de tipos, cada PE debe tener el nombre y las instrucciones de su letra."""
+        formato = FormatoCGRA(3, 4, 16, TIPOS, [["M", "C", "C", "M"]] * 3)
+
+        self.assertEqual(formato.nombre_tipo("PE00"), "memoria")
+        self.assertEqual(formato.instrucciones("PE01"), {"nop", "add"})
+
+    def test_7_rechaza_instrucciones_no_permitidas_por_tipo(self):
+        """Si un PE usa una instrucción que su tipo no tiene, debe fallar al cargar (indicando el PE y la instrucción) y también si se intenta ejecutar."""
+        formato = FormatoCGRA(1, 2, 16, TIPOS, [["M", "C"]])
+        programa = Programa({"PE00": {0: {"op": "add"}}})
+
+        with self.assertRaisesRegex(ValueError, "PE00.*ADD no está permitido"):
+            validar_tipos(programa, formato)
+
+        pe = CGRA(formato).malla.pe("PE00")
+        self.assertEqual(pe.tipo, "memoria")
+        with self.assertRaisesRegex(RuntimeError, "PE00 es de tipo memoria y no puede ejecutar ADD"):
+            pe.ejecutar({"op": "add", "dst": "rC", "src1": "rA", "src2": "rB"})
+
+    def test_8_rechaza_un_tipo_con_operacion_que_no_existe(self):
+        """Un tipo de PE no puede declarar instrucciones que no están en el ISA."""
+        with self.assertRaisesRegex(ValueError, "no existen: JMP"):
+            FormatoCGRA(1, 1, 16, {"C": {"instrucciones": ["JMP"]}}, [["C"]])
+
+    def test_9_distribucion_por_bordes_o_malla_explicita(self):
+        """Con 'distribucion', las columnas oeste y este deben ser M y el resto C; si el JSON trae 'malla', se usa tal cual."""
+        distribucion = {"oeste": "M", "este": "M", "resto": "C"}
+        ruta = self.escribir_json(filas=3, columnas=4, tipos_pe=TIPOS, distribucion=distribucion)
+        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M C C M"] * 3)
+
+        ruta = self.escribir_json(filas=2, columnas=2, tipos_pe=TIPOS, distribucion=distribucion, malla=["M C", "C M"])
+        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M C", "C M"])
 
 if __name__ == "__main__":
     unittest.main()

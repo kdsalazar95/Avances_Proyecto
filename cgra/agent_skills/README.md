@@ -1,14 +1,15 @@
 # Agent Skill Pipeline: Mesh Scheduler
 
-Use these skills in order to transform one of the supported C sources into
-per-PE instruction files for a `filas x columnas` processing-element mesh, plus
+Use these skills in order to transform every operation of the supported C
+source into per-PE instruction files for a `filas x columnas` processing-element mesh, plus
 the initial memory those programs run on (`memoria.bin`).
 
 The supported operations are `reduccion`, `matmul` and `convolucion`, all in
 one source, `operaciones/operaciones.c`. Their sizes come from the `#define`
-constants of each operation, the operations to compile come from the request
-(one, several, or all of them), and the mesh size comes from `filas` and `columnas` in `src/cgra.json`, the same file
-`run_cgra.py` reads (see [Receive Inputs](01-receive-inputs.md)).
+constants of each operation, every run compiles all of them (the
+`OPERACIONES` table of `operaciones.c`), and the CGRA (mesh size, memory size and the
+type of every PE) comes from `src/cgra.json`, the same file `run_cgra.py` reads
+(see [Receive Inputs](01-receive-inputs.md)).
 
 The CGRA behaves like a processor: it is never told which operation it runs.
 The pipeline is the compiler. It turns the source into one program per PE
@@ -18,17 +19,18 @@ The pipeline is the compiler. It turns the source into one program per PE
 things and executes them.
 
 The mesh and the problem do not have to be the same size: a larger problem is
-processed in tiles of the mesh size, and a larger mesh leaves its extra PEs in
-`NOP`.
+processed in tiles of the compute block, and a larger mesh leaves its extra PEs
+in `NOP`. The size is not fixed: every skill builds the CGRA from
+`src/cgra.json`.
 
 ## Pipeline
 
-Skills 02 to 09 compile **one operation**. When a request names several
-operations, or all of them, skill 01 reads the CGRA once and then the pipeline
-runs from skill 02 to skill 09 once per operation, one after the other, each in
-its own `programas/<operacion>/`. A failure in one operation does not stop the
+The pipeline always compiles **all the operations** of the `OPERACIONES` table,
+never only one. Skill 01 reads the CGRA once and builds the list of operations;
+then skills 02 to 09 run once per operation, one after the other, each in its
+own `programas/<operacion>/`. A failure in one operation does not stop the
 others, and the run ends with one summary line per operation (see
-[Receive Inputs](01-receive-inputs.md#one-several-or-all-operations)).
+[Receive Inputs](01-receive-inputs.md#all-operations)).
 
 1. [Receive Inputs](01-receive-inputs.md)
 2. [Generate LLVM IR and Initial Memory](02-generate-llvm-ir.md)
@@ -51,29 +53,33 @@ opt-18 -passes=dot-cfg -disable-output operaciones.ll
 opt-18 -passes=dot-ddg -disable-output operaciones.ll
 ```
 
-## Default Mesh
+## PE Types (`src/cgra.json`)
 
-`2x2` example; the mesh grows to any `filas x columnas` by extending the same
-grid, one `PE{fila}{columna}` per position, connected only to its north, south,
-east, and west neighbors:
-
-```text
-PE00 --east/west-- PE01
- |                 |
-north/south        north/south
- |                 |
-PE10 --east/west-- PE11
-```
-
-## Default Instruction Set
+One `PE{fila}{columna}` per position, connected only to its north, south, east,
+and west neighbors. The west and east columns are **memory PEs** and the rest
+are **compute PEs**, whatever the size:
 
 ```text
-MOV  reg, imm
-LD   reg, mem[index]
-ST   mem[index], reg
-ADD  dst, src1, src2
-MUL  dst, src1, src2
-SEND dir, reg
-RECV dir, reg
-NOP
+memory PEs:   PE(f, 0) and PE(f, columnas - 1), for every row f
+compute PEs:  PE(f, c) with 1 <= c <= columnas - 2
 ```
+
+## Instruction Set per PE Type
+
+```text
+                       memoria (M)   computo (C)
+MOV  reg, imm               x             x
+LD   reg, mem[index]        x
+ST   mem[index], reg        x
+ADD  dst, src1, src2                      x
+SUB  dst, src1, src2                      x
+MUL  dst, src1, src2                      x
+DIV  dst, src1, src2                      x
+SEND dir, reg               x             x
+RECV dir, reg               x             x
+NOP                         x             x
+```
+
+Memory PEs load operands and send them to the compute PEs; compute PEs compute
+and send their results back to be stored (skills 05-07). `run_cgra.py` refuses
+to load a program with an instruction outside the type of its PE.

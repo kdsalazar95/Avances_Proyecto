@@ -108,6 +108,8 @@ class SimuladorCGRA:
 
         Consola.titulo(f"CGRA {cgra.filas}x{cgra.columnas}: ejecutando {len(programa_cargado.ciclos())} ciclos")
         print(f"  Formato:  {self.ruta_formato}")
+        for linea in cgra.formato.mapa() + cgra.formato.leyenda():
+            print(f"            {linea}")
         print(f"  Programa: {carpeta}")
         print(f"  Memoria:  {ruta_memoria} ({len(formas)} regiones) cargada en una memoria de {len(cgra.memoria)} palabras")
 

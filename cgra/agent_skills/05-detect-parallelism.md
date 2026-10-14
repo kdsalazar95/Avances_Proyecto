@@ -15,17 +15,24 @@ and which must be reduced or serialized.
    - **map with a nested reduction:** independent output elements, each with its
      own local accumulation. This is `matmul` (`C[i][j]` accumulates over `k`)
      and `convolucion` (`result[i][j]` accumulates over the kernel window).
-2. Distribute the work over all `filas * columnas` PEs of the mesh, taken from
-   the manifest. If the work does not fit in the mesh, do not ask for more PEs:
-   hand it to skill 06, which splits it into tiles of the mesh size.
-3. For a **reduction loop**, use local partial sums per PE followed by a single
-   mesh reduction that ends in `PE00`. This is the only case that needs
-   `SEND`/`RECV`.
-4. For a **map with a nested reduction**, every PE owns one output element at a
-   time. An operand shared by a whole row, column or mesh enters once and
-   travels from neighbor to neighbor, so a PE reads memory only when it is the
-   one bringing the value in, or when the value is different for every PE.
-5. If bit-identical sequential floating-point behaviour is required, serialize
+2. Split every operation by the PE type that can run it (types from
+   `src/cgra.json`, see skill 01):
+   - `LD`/`ST` (memory accesses) run only on **memory PEs**;
+   - `ADD`/`SUB`/`MUL`/`DIV` (arithmetic) run only on **compute PEs**.
+
+   So every operand goes memory PE -> `SEND`/`RECV` -> compute PE, and every
+   value to store goes back compute PE -> `SEND`/`RECV` -> memory PE.
+3. Distribute the arithmetic over the compute PEs of the manifest. If the work
+   does not fit, do not ask for more PEs: hand it to skill 06, which splits it
+   into tiles of the compute block.
+4. For a **reduction loop**, use local partial sums per compute PE followed by
+   a single reduction across the compute PEs. The final sum is sent to a memory
+   PE, which stores it.
+5. For a **map with a nested reduction**, every compute PE owns one output
+   element at a time and accumulates it in `acc`. Its memory PE loads the
+   operands and delivers them; at the end the compute PE sends `acc` back and
+   the memory PE stores it.
+6. If bit-identical sequential floating-point behaviour is required, serialize
    the reduction in original index order instead of reducing across the mesh.
 
 ## Outputs
@@ -35,27 +42,28 @@ Return work units. For `reduccion`:
 ```text
 parallel_work:
   iteration i:
-    load a[i], load b[i]
-    add
-    store c[i]
+    memory PE:  load a[i], load b[i], send both     (LD, SEND)
+    compute PE: receive both, add                   (RECV, ADD)
+    compute PE: send c[i] back                      (SEND)
+    memory PE:  receive and store c[i]              (RECV, ST)
 
 reduction_work:
-  local partial sums per PE
-  final mesh reduction to PE00
+  local partial sums per compute PE
+  reduction across the compute PEs, then sent to a memory PE that stores it
 ```
 
 For `matmul` and `convolucion`:
 
 ```text
 parallel_work:
-  output element (i, j):
-    receive or load the operands of the accumulation
-    multiply and accumulate locally
-    store the element
+  output element (i, j), owned by a compute PE:
+    memory PE:  load the two operands of each step and send them
+    compute PE: receive them, multiply and accumulate locally
+    compute PE: send the element back; memory PE stores it
 
 operand_traffic:
-  values shared by a row, a column or the whole mesh cross it hop by hop
-  accumulation stays local to each PE
+  memory PE <-> compute PE, along the row (see skill 06)
+  accumulation stays local to each compute PE
 ```
 
 ## Notes

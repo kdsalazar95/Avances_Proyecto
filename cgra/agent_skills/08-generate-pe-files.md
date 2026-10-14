@@ -37,13 +37,17 @@ Each file must contain one instruction per execution cycle:
 ```text
 // PE00 instruction list
 // Mesh position: fila 0, columna 0
+// PE type: memoria (M) - NOP, MOV, LD, ST, SEND, RECV
 // One instruction per execution cycle.
 
-00: MOV acc, 0.0
-01: LD rA, a[0]
+00: LD rA, a[0]
+01: SEND east, rA
 02: LD rB, b[0]
-03: ADD rC, rA, rB
+03: SEND east, rB
 ```
+
+The type line is a comment, taken from `src/cgra.json`: it documents which
+instructions that file may contain.
 
 ## Actions
 
@@ -52,7 +56,9 @@ Each file must contain one instruction per execution cycle:
 3. Keep cycle numbers aligned across all files.
 4. Include `NOP` instructions for idle cycles so every file has the same cycle
    range.
-5. Use in `LD`/`ST` only the bank names of the regions in `memoria.bin`
+5. Write in each file only instructions of the PE's type (`src/cgra.json`):
+   `LD`/`ST` only in memory PEs, `ADD`/`SUB`/`MUL`/`DIV` only in compute PEs.
+6. Use in `LD`/`ST` only the bank names of the regions in `memoria.bin`
    (skill 02), with indices inside each region (`filas * columnas` words). The
    CGRA loads that memory as is and does not know the operation, so a bank that
    does not exist there fails at run time.

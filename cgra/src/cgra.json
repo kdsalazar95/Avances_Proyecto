@@ -1,6 +1,23 @@
 {
-  "descripcion": "Formato de la CGRA: tamaño de la malla y de la memoria de datos. Todos los PEs son iguales (CGRA homogénea) y ejecutan todo el ISA. Lo leen run_cgra.py (src/formato_cgra.py) y los skills (agent_skills/01-receive-inputs.md).",
-  "filas": 4,
-  "columnas": 4,
-  "palabras_memoria": 4096
+  "descripcion": "Formato de la CGRA: tamaño de la malla, memoria y tipos de PE. Lo leen run_cgra.py (src/formato_cgra.py) y los skills (agent_skills/01-receive-inputs.md).",
+  "filas": 9,
+  "columnas": 9,
+  "palabras_memoria": 4096,
+  "tipos_pe": {
+    "M": {
+      "nombre": "memoria",
+      "descripcion": "Lee y escribe la memoria de datos y envía/recibe datos a sus vecinos. No calcula.",
+      "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV"]
+    },
+    "C": {
+      "nombre": "computo",
+      "descripcion": "Ejecuta operaciones sobre sus registros y envía/recibe datos a sus vecinos. No accede a la memoria de datos.",
+      "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]
+    }
+  },
+  "distribucion": {
+    "oeste": "M",
+    "este": "M",
+    "resto": "C"
+  }
 }
