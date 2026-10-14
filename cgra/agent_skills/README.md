@@ -57,12 +57,18 @@ opt-18 -passes=dot-ddg -disable-output operaciones.ll
 
 One `PE{fila}{columna}` per position, connected only to its north, south, east,
 and west neighbors. The west and east columns are **memory PEs** and the rest
-are **compute PEs**, whatever the size:
+are **compute PEs**, whatever the size. The rows alternate between scalar
+(even rows, from row 0) and vector (odd rows):
 
 ```text
 memory PEs:   PE(f, 0) and PE(f, columnas - 1), for every row f
 compute PEs:  PE(f, c) with 1 <= c <= columnas - 2
+
+even rows:    M C C ... C M     M = memoria escalar,   C = computo escalar
+odd rows:     D V V ... V D     D = memoria vectorial, V = computo vectorial
 ```
+
+A vector PE has the scalar instructions of its class plus the vector ones.
 
 ## Instruction Set per PE Type
 
@@ -78,6 +84,23 @@ DIV  dst, src1, src2                      x
 SEND dir, reg               x             x
 RECV dir, reg               x             x
 NOP                         x             x
+```
+
+When `src/cgra.json` has `ancho_vector` (`W`) and vector rows, the pipeline
+runs in `vectorial` mode (skill 01): the vector rows do the work in blocks of
+`W` contiguous elements, and the scalar rows do, at the same time, what does
+not fill a block, with the scalar instructions above. The vector PEs (`D`, `V`)
+also have every scalar instruction of their class:
+
+```text
+                    memoria (D)   computo (V)
+VLD  vreg, mem[index]       x                       W contiguous words
+VST  mem[index], vreg       x
+VADD/VSUB/VMUL/VDIV                       x         lane by lane
+VREDSUM reg, vreg                         x         sum of the W lanes
+VBCAST  vreg, reg                         x         a scalar to the W lanes
+VSEND dir, vreg             x             x         the whole vector, 1 cycle
+VRECV dir, vreg             x             x
 ```
 
 Memory PEs load operands and send them to the compute PEs; compute PEs compute

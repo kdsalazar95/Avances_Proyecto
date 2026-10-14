@@ -19,6 +19,19 @@ RECV dir, reg
 NOP
 ```
 
+Vector instructions, only in `vectorial` mode (skill 01). A vector register
+(`v0` .. `v7`) holds `W` words (`ancho_vector`):
+
+```text
+VLD     vreg, mem[index]        W contiguous words from mem[index]
+VST     mem[index], vreg        W contiguous words to mem[index]
+VADD    vdst, vsrc1, vsrc2      lane by lane (also VSUB, VMUL, VDIV)
+VREDSUM reg, vreg               sum of the W lanes into a scalar register
+VBCAST  vreg, reg               a scalar copied to the W lanes
+VSEND   dir, vreg               the whole vector to a neighbor, in one cycle
+VRECV   dir, vreg
+```
+
 ## Instructions per PE Type
 
 The instructions a PE may emit depend on its type (`src/cgra.json`, skill 01):
@@ -27,6 +40,11 @@ The instructions a PE may emit depend on its type (`src/cgra.json`, skill 01):
 memoria (M): NOP, MOV, LD, ST, SEND, RECV
 computo (C): NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV
 ```
+
+In `vectorial` mode the types also have their vector instructions (memory PEs:
+`VLD`, `VST`, `VSEND`, `VRECV`; compute PEs: `VADD`, `VMUL`, `VREDSUM`,
+`VBCAST`, `VSEND`, `VRECV`, ...): take the exact lists from the map printed in
+skill 01.
 
 Never emit an instruction outside the type of the PE: `run_cgra.py` refuses to
 load the program and reports the PE and cycle.
@@ -41,7 +59,8 @@ load the program and reports the PE and cycle.
    overwrite it before its last use.
 5. Align neighbor communication: a `SEND <dir>` and the neighbor's
    `RECV <opposite>` go in the **same cycle**. The data is available to the
-   receiver in that cycle.
+   receiver in that cycle. A `VSEND` pairs only with a `VRECV`, and a `SEND`
+   only with a `RECV`: a scalar and a vector never cross the same transfer.
 6. Preserve operation dependencies from the DDG.
 7. For local accumulation, accumulate in the compute PE before starting the
    reduction across the mesh.
@@ -130,6 +149,84 @@ and start again.
 A tile therefore lasts `4 * steps + 4` cycles: `4 * 9 + 4 = 40` in a `9x9`
 matmul and `4 * 16 + 4 = 68` in a convolution with a `4x4` kernel.
 
+## Vectorial Mode Schedules
+
+These tables follow the vector work units of skill 06, for a vector compute PE
+(`V`) next to its vector server (`D`), as the scalar tables above. The scalar
+rows run the scalar tables at the same time. Every table was checked in the
+simulator, alone and with scalar and vector rows together.
+
+### Reduccion
+
+1. Blocks, one **6-cycle step** per block `j` of the compute PE (`i = j * W`),
+   pipelined like the scalar step:
+
+   ```text
+   cycle | server (M)                    | compute (C)
+   ------+-------------------------------+------------------------------------
+   t+0   | VLD  v0, a[i]                 | VREDSUM rC, v2      (previous block)
+   t+1   | VSEND <to C>, v0              | VRECV <to M>, v0
+   t+2   | VLD  v1, b[i]                 | ADD  acc, acc, rC   (previous block)
+   t+3   | VSEND <to C>, v1              | VRECV <to M>, v1
+   t+4   | VST  c[previous i], v2        | VADD v2, v0, v1
+   t+5   | VRECV <to C>, v2              | VSEND <to M>, v2
+   ```
+
+   - In the first block, the compute PE emits `MOV acc, 0.0` at `t+0` and `NOP`
+     at `t+2`, and the server emits `NOP` at `t+4`.
+   - After the last block, two closing cycles: the server emits
+     `VST c[last i], v2` and then `NOP`; the compute PE emits `VREDSUM rC, v2`
+     and then `ADD acc, acc, rC`.
+2. Tail elements, on the scalar compute PEs (skill 06), with the scalar 6-cycle
+   step of [Reduccion Schedule](#reduccion-schedule) and its closing cycle,
+   in the same cycles as the blocks of the vector rows.
+   - Only if there are no scalar compute PEs, the vector compute PEs do the
+     tail after their blocks: in the first tail step the compute PE emits
+     `NOP` at `t+0` instead of `ADD` (there is no previous scalar element) and
+     the server `NOP` at `t+4`.
+3. A compute PE with no blocks and no tail elements emits `MOV acc, 0.0` once.
+   Pairs pad with `NOP` so all of them reach the reduction route together; the
+   route and the store are the scalar ones.
+
+### Matmul and Convolucion
+
+One output segment of skill 06 per compute PE and tile. Every step of the
+accumulation is a **5-cycle step**: the server sends a scalar and a vector, and
+the compute PE copies the scalar to every lane, multiplies and accumulates the
+previous step in `v3`:
+
+```text
+cycle | server (M)                  | compute (C)
+------+-----------------------------+------------------------------------
+t+0   | LD   rA, <scalar factor>    | VMUL v2, v0, v1      (previous step)
+t+1   | SEND <to C>, rA             | RECV <to M>, rA
+t+2   | VLD  v1, <vector factor>    | VADD v3, v3, v2      (previous step)
+t+3   | VSEND <to C>, v1            | VRECV <to M>, v1
+t+4   | NOP                         | VBCAST v0, rA
+```
+
+- In the first step of a tile, the compute PE clears `v3`: `MOV rT, 0.0` at
+  `t+0` and `VBCAST v3, rT` at `t+2`.
+- The factors are the ones of skill 06.
+
+After the last step, close the tile in 4 cycles:
+
+```text
+cycle | server (M)                  | compute (C)
+------+-----------------------------+------------------------------------
+e+0   | NOP                         | VMUL v2, v0, v1
+e+1   | NOP                         | VADD v3, v3, v2
+e+2   | VRECV <to C>, v3            | VSEND <to M>, v3
+e+3   | VST  result[...], v3        | NOP
+```
+
+A vector tile lasts `5 * steps + 4` cycles; a pair with no segment in the tile
+emits `NOP` on both PEs for all of it. The tail tiles of skill 06 run at the
+same time on the scalar rows, with the scalar table of
+[Matmul and Convolucion Tile Schedule](#matmul-and-convolucion-tile-schedule)
+(`4 * steps + 4` cycles each). The group that finishes first pads with `NOP`
+until the other one ends.
+
 ## Shared or Distant Servers
 
 With more than two compute columns, a memory PE serves several compute PEs and
@@ -140,9 +237,13 @@ them; build the cycles from the rules above:
    cycle along the row. Each compute PE in between receives the value into `rT`
    in one cycle (`RECV <to M>, rT`) and sends it on in the next
    (`SEND <to C>, rT`). The last hop receives into the real register (`rA`,
-   `rB`), and results travel back to the server the same way.
+   `rB`), and results travel back to the server the same way. A vector is
+   relayed the same way through `v7` (`VRECV <to M>, v7`, then
+   `VSEND <to C>, v7`).
 2. A relaying compute PE can only relay in a cycle where it is not using that
-   link, and `rT` must be free: it holds one value in transit at a time.
+   link, and `rT` (or `v7`) must be free: each holds one value in transit at a
+   time. In vectorial mode the first step of a tile also uses `rT` to clear
+   `v3`.
 3. A server with several compute PEs serves them one after another: it loads
    and sends the operands of one, then of the next. The nearest one can keep
    using the table above; the farther ones take longer steps because of the
@@ -161,6 +262,16 @@ rB   second loaded operand
 rC   computed element result
 rT   received temporary value (reduction route, relays)
 acc  local accumulation
+```
+
+In `vectorial` mode:
+
+```text
+v0   first vector operand (a block of a; the scalar factor copied to every lane)
+v1   second vector operand (a block of b; the vector factor)
+v2   vector result (a block of c; the product of a step)
+v3   vector accumulation of an output segment
+v7   relayed vector (shared or distant servers)
 ```
 
 ## Output Format

@@ -34,9 +34,17 @@ class Traza:
             direccion = instruccion["addr"]
             return (f"{instruccion['bank']}[{instruccion['index']}] = "
                     f"{formatear_numero(memoria[direccion])}  (dirección {direccion})")
+        if op == "vst":
+            direccion, ancho = instruccion["addr"], pe.ancho_vector
+            return (f"{instruccion['bank']}[{instruccion['index']}..{instruccion['index'] + ancho - 1}] = "
+                    f"{Consola.lista(memoria[direccion:direccion + ancho])}  (dirección {direccion})")
         if op == "send":
             return f"envía {formatear_numero(pe.leer_registro(instruccion['src']))}"
+        if op == "vsend":
+            return f"envía {Consola.lista(pe.leer_vector(instruccion['src']))}"
         if "dst" in instruccion:
+            if instruccion["dst"] in ISA.VECTORIALES:
+                return f"{instruccion['dst']} = {Consola.lista(pe.leer_vector(instruccion['dst']))}"
             return f"{instruccion['dst']} = {formatear_numero(pe.leer_registro(instruccion['dst']))}"
         return ""
 

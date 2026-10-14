@@ -41,11 +41,11 @@ class ReporteCiclos:
         return {"total": len(ciclos), "comunicacion": comunicacion, "computo": computo, "inactivo": inactivo}
 
     def comunicaciones(self):
-        """Cada SEND del programa: ciclo, emisor, receptor y dirección."""
+        """Cada SEND (o VSEND) del programa: ciclo, emisor, receptor y dirección."""
         envios = []
         for ciclo in self.programa.ciclos():
             for emisor, instruccion in self.programa.del_ciclo(ciclo).items():
-                if instruccion["op"] == "send":
+                if instruccion["op"] in ISA.ENVIOS:
                     envios.append({
                         "ciclo": ciclo,
                         "emisor": emisor,

@@ -43,5 +43,5 @@ class Cargador:
         self.cargar_imagen(ruta_memoria, base)
         programa = Programa.leer(ruta_instrucciones, self.cgra.malla)
         validar_tipos(programa, self.cgra.formato)
-        programa.enlazar(self.cgra.memoria.simbolos)
+        programa.enlazar(self.cgra.memoria.simbolos, self.cgra.formato.ancho_vector)
         return programa

@@ -57,9 +57,13 @@ instructions that file may contain.
 4. Include `NOP` instructions for idle cycles so every file has the same cycle
    range.
 5. Write in each file only instructions of the PE's type (`src/cgra.json`):
-   `LD`/`ST` only in memory PEs, `ADD`/`SUB`/`MUL`/`DIV` only in compute PEs.
-6. Use in `LD`/`ST` only the bank names of the regions in `memoria.bin`
-   (skill 02), with indices inside each region (`filas * columnas` words). The
+   `LD`/`ST` only in memory PEs, `ADD`/`SUB`/`MUL`/`DIV` only in compute PEs,
+   and the same for their vector forms (`VLD`/`VST`, `VADD`/...) in
+   `vectorial` mode.
+6. Use in `LD`/`ST` (and `VLD`/`VST`) only the bank names of the regions in `memoria.bin`
+   (skill 02), with indices inside each region (`filas * columnas` words); a
+   `VLD`/`VST` at index `i` uses `i .. i + W - 1`, so all of them must be
+   inside. The
    CGRA loads that memory as is and does not know the operation, so a bank that
    does not exist there fails at run time.
 

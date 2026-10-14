@@ -1,4 +1,4 @@
-"""Formato de la CGRA: dimensiones, memoria y tipos de PE en JSON."""
+"""Formato de la CGRA: dimensiones, memoria, ancho de los vectores y tipos de PE en JSON."""
 
 import json
 from pathlib import Path
@@ -8,32 +8,39 @@ from malla import Malla
 
 RUTA_POR_DEFECTO = Path(__file__).with_name("cgra.json")
 BORDES = ("norte", "sur", "oeste", "este")
-# Ordenadas para que la leyenda salga igual en cada corrida (los frozenset no tienen orden).
-INSTRUCCIONES_ISA = tuple(op.upper() for op in (
-    "nop", "mov", "ld", "st", *sorted(ISA.ARITMETICAS), *sorted(ISA.COMUNICACION),
-))
+PARIDADES = ("filas_pares", "filas_impares")  # la fila 0 es par
+INSTRUCCIONES_ISA = ISA.INSTRUCCIONES
 
 
 class FormatoCGRA:
     """Descripción de la malla, memoria y capacidades de los PEs.
 
     Si no se especifican tipos, todos los PEs reciben el ISA completo y la
-    CGRA conserva el comportamiento homogéneo.
+    CGRA conserva el comportamiento homogéneo (sin las instrucciones
+    vectoriales si no hay ``ancho_vector``).
+
+    ``ancho_vector`` es el número de palabras de cada registro vectorial,
+    igual para toda la CGRA. Solo hace falta si algún tipo de PE tiene
+    instrucciones vectoriales.
     """
 
     CAMPOS = ("filas", "columnas", "palabras_memoria")
 
-    def __init__(self, filas, columnas, palabras_memoria, tipos_pe=None, malla=None):
+    def __init__(self, filas, columnas, palabras_memoria, tipos_pe=None, malla=None, ancho_vector=None):
         if type(filas) is not int or type(columnas) is not int or filas <= 0 or columnas <= 0:
             raise ValueError("La malla debe tener al menos una fila y una columna")
         if type(palabras_memoria) is not int or palabras_memoria <= 0:
             raise ValueError("La memoria de la CGRA debe tener al menos una palabra")
+        if ancho_vector is not None and (type(ancho_vector) is not int or ancho_vector <= 0):
+            raise ValueError("'ancho_vector' debe ser un entero mayor que cero")
 
         self.filas = filas
         self.columnas = columnas
         self.palabras_memoria = palabras_memoria
+        self.ancho_vector = ancho_vector
         if tipos_pe is None:
-            tipos_pe = {"G": {"nombre": "generico", "descripcion": "", "instrucciones": INSTRUCCIONES_ISA}}
+            completo = ISA.INSTRUCCIONES if ancho_vector else ISA.INSTRUCCIONES_ESCALARES
+            tipos_pe = {"G": {"nombre": "generico", "descripcion": "", "instrucciones": completo}}
         if malla is None:
             if len(tipos_pe) != 1:
                 raise ValueError("Debe indicar una malla o distribución para asignar los tipos de PE")
@@ -61,6 +68,12 @@ class FormatoCGRA:
                 raise ValueError(
                     f"El tipo '{letra}' usa instrucciones que no existen: {', '.join(sorted(desconocidas))}"
                 )
+            vectoriales = set(tipo["instrucciones"]) & set(ISA.INSTRUCCIONES_VECTORIALES)
+            if vectoriales and not self.ancho_vector:
+                raise ValueError(
+                    f"El tipo '{letra}' usa instrucciones vectoriales ({', '.join(sorted(vectoriales))}) "
+                    "y falta 'ancho_vector'"
+                )
         if len(self.malla) != self.filas:
             raise ValueError(f"'malla' tiene {len(self.malla)} filas y 'filas' es {self.filas}")
         for f, fila in enumerate(self.malla):
@@ -85,10 +98,13 @@ class FormatoCGRA:
         return [" ".join(fila) for fila in self.malla]
 
     def leyenda(self):
-        return [
+        lineas = [
             f"{letra} = {tipo['nombre']}: {', '.join(tipo['instrucciones'])}"
             for letra, tipo in self.tipos_pe.items()
         ]
+        if self.ancho_vector:
+            lineas.append(f"Vectores de {self.ancho_vector} palabras (v0..v{ISA.CANTIDAD_VECTORIALES - 1})")
+        return lineas
 
     @classmethod
     def cargar(cls, ruta=RUTA_POR_DEFECTO):
@@ -109,8 +125,9 @@ class FormatoCGRA:
             raise ValueError(f"{ruta}: {', '.join(no_enteros)} deben ser números enteros")
 
         try:
+            ancho_vector = datos.get("ancho_vector")
             if "tipos_pe" not in datos:
-                return cls(datos["filas"], datos["columnas"], datos["palabras_memoria"])
+                return cls(datos["filas"], datos["columnas"], datos["palabras_memoria"], ancho_vector=ancho_vector)
             tipos_pe = {
                 letra: {
                     "nombre": tipo.get("nombre", letra),
@@ -125,13 +142,32 @@ class FormatoCGRA:
                 malla = generar_malla(datos["filas"], datos["columnas"], datos["distribucion"])
             else:
                 raise ValueError("falta 'malla' o 'distribucion' para asignar los tipos de PE")
-            return cls(datos["filas"], datos["columnas"], datos["palabras_memoria"], tipos_pe, malla)
+            return cls(datos["filas"], datos["columnas"], datos["palabras_memoria"], tipos_pe, malla, ancho_vector)
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"{ruta}: {error}") from None
 
 
 def generar_malla(filas, columnas, distribucion):
-    """Genera una cuadrícula de tipos usando reglas para bordes y resto."""
+    """Genera una cuadrícula de tipos usando reglas para bordes y resto.
+
+    ``distribucion`` es una regla (``{"oeste": "M", "este": "M", "resto": "C"}``)
+    o una regla por paridad de fila, para alternar filas de tipos distintos:
+
+        {"filas_pares":   {"oeste": "M", "este": "M", "resto": "C"},
+         "filas_impares": {"oeste": "D", "este": "D", "resto": "V"}}
+    """
+    if set(distribucion) & set(PARIDADES):
+        desconocidas = set(distribucion) - set(PARIDADES)
+        if desconocidas:
+            raise ValueError(
+                f"'distribucion' mezcla {', '.join(PARIDADES)} con otras claves: {', '.join(sorted(desconocidas))}"
+            )
+        faltan = [clave for clave in PARIDADES if clave not in distribucion]
+        if faltan:
+            raise ValueError(f"'distribucion' necesita {', '.join(faltan)}")
+        por_paridad = [generar_malla(filas, columnas, distribucion[clave]) for clave in PARIDADES]
+        return [por_paridad[fila % 2][fila] for fila in range(filas)]
+
     desconocidas = set(distribucion) - set(BORDES) - {"resto"}
     if desconocidas:
         raise ValueError(f"'distribucion' tiene claves desconocidas: {', '.join(sorted(desconocidas))}")

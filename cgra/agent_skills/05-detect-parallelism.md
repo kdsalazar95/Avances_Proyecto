@@ -34,6 +34,22 @@ and which must be reduced or serialized.
    the memory PE stores it.
 6. If bit-identical sequential floating-point behaviour is required, serialize
    the reduction in original index order instead of reducing across the mesh.
+7. In `vectorial` mode (manifest, skill 01), group the work in **blocks of `W`
+   contiguous elements** for the vector compute PEs, and keep the scalar work
+   units above for the elements that do not fill a block (the tail), which go
+   to the scalar compute PEs. Both run at the same time, each on its own rows. A `VLD`/`VST` only reads or writes
+   contiguous words, so every block must be contiguous in memory:
+   - **map loop:** a block is `W` consecutive iterations (`c[i:i+W]`).
+   - **reduction loop:** each block is reduced inside the compute PE with
+     `VREDSUM` and added to `acc`; the reduction across the compute PEs does
+     not change.
+   - **map with a nested reduction:** a block is `W` consecutive output
+     elements of the **same row**, accumulated as a vector. In matmul,
+     `result[i][j:j+W] += a[i][k] * b[k][j:j+W]`; in convolucion,
+     `result[i][j:j+W] += kernel[ki][kj] * imagen[i+ki][j+kj : j+kj+W]`. The
+     scalar factor is copied to every lane with `VBCAST`; the vector factor is
+     a piece of a row, so it is contiguous. Do not vectorize along a column
+     (`b[k:k+W][j]` is not contiguous).
 
 ## Outputs
 
@@ -52,6 +68,19 @@ reduction_work:
   reduction across the compute PEs, then sent to a memory PE that stores it
 ```
 
+In `vectorial` mode, for `reduccion`:
+
+```text
+parallel_work:
+  block j (elements jW .. jW+W-1):
+    memory PE:  VLD a, VLD b, send both              (VLD, VSEND)
+    compute PE: receive both, add lane by lane       (VRECV, VADD)
+    compute PE: send c back, reduce it into acc      (VSEND, VREDSUM, ADD)
+    memory PE:  receive and store the block of c     (VRECV, VST)
+tail_work:
+  the elements after the last full block, as the scalar iterations above
+```
+
 For `matmul` and `convolucion`:
 
 ```text
@@ -64,6 +93,21 @@ parallel_work:
 operand_traffic:
   memory PE <-> compute PE, along the row (see skill 06)
   accumulation stays local to each compute PE
+```
+
+In `vectorial` mode, for `matmul` and `convolucion`:
+
+```text
+parallel_work:
+  row segment (i, j0 .. j0+W-1), owned by a compute PE:
+    memory PE:  load the scalar factor and the vector factor of each step,
+                send both                                 (LD, SEND, VLD, VSEND)
+    compute PE: copy the scalar to every lane, multiply,
+                accumulate in a vector register            (VBCAST, VMUL, VADD)
+    compute PE: send the segment back; memory PE stores it (VSEND, VRECV, VST)
+tail_work:
+  the output columns after the last full segment of each row, as the scalar
+  output elements above
 ```
 
 ## Notes

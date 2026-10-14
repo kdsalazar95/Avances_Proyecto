@@ -8,6 +8,7 @@ de memoria y prepara el programa, y ``ejecutar()`` corre sus ciclos,
 como un procesador con un ejecutable.
 """
 
+from isa import ISA
 from malla import Malla
 from memoria import Memoria
 
@@ -18,7 +19,7 @@ class CGRA:
     def __init__(self, formato):
         """Crea la CGRA "en blanco" según su ``FormatoCGRA``."""
         self.formato = formato
-        self.malla = Malla(formato.filas, formato.columnas)
+        self.malla = Malla(formato.filas, formato.columnas, formato.ancho_vector)
         for pe_id in self.malla.ids():
             pe = self.malla.pe(pe_id)
             pe.tipo = formato.nombre_tipo(pe_id)
@@ -36,13 +37,13 @@ class CGRA:
     def ejecutar(self, programa, traza=None):
         """Ejecuta el programa: en cada ciclo, cada PE ejecuta su instrucción.
 
-        Los SEND de un ciclo se ejecutan antes que el resto, para que el
-        RECV del vecino encuentre el dato en la cola en ese mismo ciclo.
+        Los SEND (y VSEND) de un ciclo se ejecutan antes que el resto, para que
+        el RECV del vecino encuentre el dato en la cola en ese mismo ciclo.
         Si se da una ``Traza``, se anota en ella cada instrucción ejecutada.
         """
         for ciclo in programa.ciclos():
             del_ciclo = programa.del_ciclo(ciclo)
-            envios = [pe_id for pe_id, instruccion in del_ciclo.items() if instruccion["op"] == "send"]
+            envios = [pe_id for pe_id, instruccion in del_ciclo.items() if instruccion["op"] in ISA.ENVIOS]
             resto = [pe_id for pe_id in del_ciclo if pe_id not in envios]
             for pe_id in envios + resto:
                 pe = self.malla.pe(pe_id)

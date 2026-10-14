@@ -1,23 +1,41 @@
 {
-  "descripcion": "Formato de la CGRA: tamaño de la malla, memoria y tipos de PE. Lo leen run_cgra.py (src/formato_cgra.py) y los skills (agent_skills/01-receive-inputs.md).",
+  "descripcion": "Formato de la CGRA: tamaño de la malla, memoria, ancho de los vectores y tipos de PE. Las filas alternan: las pares son escalares (M, C) y las impares vectoriales (D, V); en cada fila los bordes oeste y este son de memoria y el resto de cómputo. Lo leen run_cgra.py (src/formato_cgra.py) y los skills (agent_skills/01-receive-inputs.md).",
   "filas": 9,
   "columnas": 9,
   "palabras_memoria": 4096,
+  "ancho_vector": 4,
   "tipos_pe": {
     "M": {
-      "nombre": "memoria",
-      "descripcion": "Lee y escribe la memoria de datos y envía/recibe datos a sus vecinos. No calcula.",
+      "nombre": "memoria escalar",
+      "descripcion": "Lee y escribe la memoria de datos de a una palabra y envía/recibe escalares. No calcula.",
       "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV"]
     },
     "C": {
-      "nombre": "computo",
-      "descripcion": "Ejecuta operaciones sobre sus registros y envía/recibe datos a sus vecinos. No accede a la memoria de datos.",
+      "nombre": "computo escalar",
+      "descripcion": "Opera sobre registros escalares y envía/recibe escalares. No accede a la memoria de datos.",
       "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]
+    },
+    "D": {
+      "nombre": "memoria vectorial",
+      "descripcion": "Como la memoria escalar, y además lee/escribe ancho_vector palabras seguidas y envía/recibe vectores. No calcula.",
+      "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV", "VLD", "VST", "VSEND", "VRECV"]
+    },
+    "V": {
+      "nombre": "computo vectorial",
+      "descripcion": "Como el cómputo escalar, y además opera vectores carril a carril y envía/recibe vectores. No accede a la memoria de datos.",
+      "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV", "VADD", "VSUB", "VMUL", "VDIV", "VREDSUM", "VBCAST", "VSEND", "VRECV"]
     }
   },
   "distribucion": {
-    "oeste": "M",
-    "este": "M",
-    "resto": "C"
+    "filas_pares": {
+      "oeste": "M",
+      "este": "M",
+      "resto": "C"
+    },
+    "filas_impares": {
+      "oeste": "D",
+      "este": "D",
+      "resto": "V"
+    }
   }
 }

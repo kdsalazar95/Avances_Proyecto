@@ -23,6 +23,7 @@ import test_formato_cgra
 import test_cargador
 import test_operaciones
 import test_simulador
+import test_vectorial
 
 
 # Nombres de sección más amigables para cada clase de prueba.
@@ -38,6 +39,8 @@ NOMBRES_DE_SECCION = {
     "TestCargador": "Arranque de la CGRA y cargador (memoria en blanco)",
     "TestOperaciones": "Operaciones (operaciones.c genera memoria.bin)",
     "TestSimulador": "Simulador completo (una operación o todas)",
+    "TestPEVectorial": "PE vectorial (registros v0..v7)",
+    "TestCGRAVectorial": "CGRA con PEs vectoriales (ancho_vector)",
 }
 
 
@@ -109,6 +112,8 @@ def main():
         test_cargador.TestCargador,
         test_operaciones.TestOperaciones,
         test_simulador.TestSimulador,
+        test_vectorial.TestPEVectorial,
+        test_vectorial.TestCGRAVectorial,
     ]
     suite = unittest.TestSuite()
     for clase in orden_de_clases:

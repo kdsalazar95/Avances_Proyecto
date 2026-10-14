@@ -10,24 +10,29 @@ respect mesh communication.
 1. All `filas * columnas` PE files exist, one per PE of the mesh.
 2. All files cover the same cycle range.
 3. Each cycle has exactly one instruction per PE.
-4. Every `SEND` has a matching neighbor `RECV`.
+4. Every `SEND` has a matching neighbor `RECV`, and every `VSEND` a matching
+   `VRECV` (a `VSEND` never pairs with a `RECV`).
 5. Direction pairs are valid:
    - `SEND west` matches neighbor `RECV east`
    - `SEND east` matches neighbor `RECV west`
    - `SEND north` matches neighbor `RECV south`
    - `SEND south` matches neighbor `RECV north`
 6. No diagonal communication is used, and no transfer leaves the mesh.
-7. Registers are defined before use.
+7. Registers, scalar and vector, are defined before use.
 8. Stores occur only after their source values are computed.
-9. All loop iterations are scheduled exactly once.
+9. All loop iterations are scheduled exactly once. In `vectorial` mode, every
+   element is in exactly one block (or segment) or in the tail, never in both.
 10. The final reduction result is stored by the memory PE at the end of the
     route of skill 06 (`PE00`), unless the user
     requested a different output PE.
-11. Every `LD`/`ST` names a region of `memoria.bin` and stays inside its size.
+11. Every `LD`/`ST` names a region of `memoria.bin` and stays inside its size;
+    the `W` words of a `VLD`/`VST` too.
     Read the regions from its symbol table (layout in `operaciones/memoria_cgra.h`), or
     load it with `ImagenMemoria.leer()` of `src/memoria.py`.
 12. Every PE only uses instructions of its type in `src/cgra.json`: no `LD`/`ST`
-    in a compute PE, no `ADD`/`SUB`/`MUL`/`DIV` in a memory PE.
+    in a compute PE, no `ADD`/`SUB`/`MUL`/`DIV` in a memory PE, and the same for
+    the vector forms: vector instructions only in the vector PEs (`D`, `V`). In
+    `escalar` mode there is no vector instruction at all.
 13. `memoria.bin` fits in `palabras_memoria` of `src/cgra.json`.
 
 Checks 1-6 and 11-13 are what `run_cgra.py` enforces when it loads the program;

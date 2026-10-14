@@ -6,7 +6,7 @@ Cada archivo tiene una instrucción por ciclo:
     01: LD rA, a[0]     // los comentarios empiezan con //
 
 Todos los PEs deben cubrir los mismos ciclos, y cada SEND debe tener en
-el mismo ciclo el RECV de su vecino (y al revés).
+el mismo ciclo el RECV de su vecino (y al revés); lo mismo VSEND y VRECV.
 """
 
 import re
@@ -70,7 +70,7 @@ class Programa:
         return {pe_id: instrucciones[ciclo] for pe_id, instrucciones in self.instrucciones.items()}
 
     def validar(self, malla):
-        """Ciclos consecutivos e iguales en todos los PEs, y SEND/RECV emparejados."""
+        """Ciclos consecutivos e iguales en todos los PEs, y SEND/RECV (VSEND/VRECV) emparejados."""
         ciclos = set(self.ciclos())
         if ciclos != set(range(max(ciclos) + 1)):
             raise ValueError("Los ciclos deben comenzar en 0 y ser consecutivos")
@@ -84,7 +84,7 @@ class Programa:
                 if instruccion["op"] not in ISA.COMUNICACION:
                     continue
                 otro = malla.vecino(pe_id, instruccion["dir"])
-                esperada = "recv" if instruccion["op"] == "send" else "send"
+                esperada = ISA.PAREJA[instruccion["op"]]
                 pareja = del_ciclo[otro]
                 if pareja["op"] != esperada or pareja["dir"] != OPUESTA[instruccion["dir"]]:
                     raise ValueError(
@@ -92,22 +92,27 @@ class Programa:
                         f"con {otro} {esperada.upper()} {OPUESTA[instruccion['dir']]}"
                     )
 
-    def enlazar(self, simbolos):
-        """Le pone a cada LD/ST la dirección de su palabra en la memoria plana.
+    def enlazar(self, simbolos, ancho_vector=None):
+        """Le pone a cada LD/ST (VLD/VST) la dirección de su palabra en la memoria plana.
 
         ``a[3]`` pasa a ser la dirección de ``a`` + 3, según la tabla de
-        símbolos de lo que el cargador copió a la memoria.
+        símbolos de lo que el cargador copió a la memoria. Un VLD/VST usa
+        ``ancho_vector`` palabras desde ahí, y todas deben caber en la región.
         """
         for pe_id, instrucciones in self.instrucciones.items():
             for ciclo, instruccion in instrucciones.items():
-                if instruccion["op"] not in {"ld", "st"}:
+                if instruccion["op"] not in ISA.MEMORIA:
                     continue
+                palabras = ancho_vector if instruccion["op"] in {"vld", "vst"} else 1
+                if not palabras:
+                    raise ValueError(f"{pe_id}, ciclo {ciclo}: {instruccion['op'].upper()} necesita 'ancho_vector' en cgra.json")
                 banco, indice = instruccion["bank"], instruccion["index"]
                 if banco not in simbolos:
                     raise ValueError(f"{pe_id}, ciclo {ciclo}: la región '{banco}' no está en la memoria cargada")
                 direccion, filas, columnas = simbolos[banco]
-                if not 0 <= indice < filas * columnas:
+                if not (0 <= indice and indice + palabras <= filas * columnas):
+                    ocupa = f"{banco}[{indice}]" if palabras == 1 else f"{banco}[{indice}..{indice + palabras - 1}]"
                     raise ValueError(
-                        f"{pe_id}, ciclo {ciclo}: {banco}[{indice}] se sale de la región ({filas * columnas} palabras)"
+                        f"{pe_id}, ciclo {ciclo}: {ocupa} se sale de la región ({filas * columnas} palabras)"
                     )
                 instruccion["addr"] = direccion + indice

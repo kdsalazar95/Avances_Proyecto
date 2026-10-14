@@ -19,6 +19,7 @@ size is an example):
   "filas": <filas>,
   "columnas": <columnas>,
   "palabras_memoria": <palabras>,
+  "ancho_vector": <W>,
   "tipos_pe": {
     "M": {"nombre": "memoria", "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV"]},
     "C": {"nombre": "computo", "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]}
@@ -26,6 +27,8 @@ size is an example):
   "distribucion": {"oeste": "M", "este": "M", "resto": "C"}
 }
 ```
+
+`ancho_vector` is optional: without it the CGRA has no vector registers.
 
 1. Read `filas` and `columnas`: the mesh size (`filas x columnas`). Whatever
    numbers they hold are the mesh for this run; never assume a size.
@@ -44,17 +47,28 @@ size is an example):
    A PE never executes an instruction outside its type; `run_cgra.py` refuses
    to load a program that does.
 3. Classify every PE as a **memory PE** (its type has `LD`/`ST`) or a
-   **compute PE** (its type has `ADD`/`MUL`). The `distribucion` places them:
-   the west and east columns are memory PEs, which can read and write the data
-   memory and send data to their neighbors, and every other PE is a compute PE,
-   which only executes instructions and never touches memory:
+   **compute PE** (its type has `ADD`/`MUL`), and each of them as **scalar** or
+   **vector** (its type also has the `V...` instructions). The `distribucion`
+   places them: in every row the west and east columns are memory PEs, which
+   can read and write the data memory and send data to their neighbors, and
+   every other PE is a compute PE, which only executes instructions and never
+   touches memory. With `filas_pares` / `filas_impares`, the rows alternate:
+   even rows (row 0 first) are scalar and odd rows are vector:
 
    ```text
    memory PEs:   PE(f, 0) and PE(f, columnas - 1), for every row f
-                 memoria (M): LD, ST, SEND, RECV, MOV, NOP          -> moves data, never computes
    compute PEs:  PE(f, c) with 1 <= c <= columnas - 2
-                 computo (C): ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP -> computes, never touches memory
+   even rows f:  M (memoria escalar)   C (computo escalar)
+   odd rows f:   D (memoria vectorial) V (computo vectorial)
+
+   M: NOP, MOV, LD, ST, SEND, RECV                    -> moves data, never computes
+   C: NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV        -> computes, never touches memory
+   D: M + VLD, VST, VSEND, VRECV
+   V: C + VADD, VSUB, VMUL, VDIV, VREDSUM, VBCAST, VSEND, VRECV
    ```
+
+   A vector PE also has the scalar instructions of its class. If the
+   `distribucion` is a single rule (no `filas_pares`), every row is alike.
 
    Use the map printed by the command above as the picture of the CGRA for this
    run; the later skills apply their rules to it.
@@ -64,13 +78,29 @@ size is an example):
    a generic PE accepts both roles, so the same skills apply.
 4. Read `palabras_memoria`: the size of the data memory, in words. The
    `memoria.bin` of the program must fit in it.
-5. Treat those values as authoritative and continue without asking, even when
+5. Decide the **mode** of the run. It is `vectorial` when the file has
+   `ancho_vector` (`W`, the words of every vector register) **and** the map has
+   vector compute PEs served by vector memory PEs, with the vector
+   instructions the vector schedules use:
+
+   ```text
+   vector memory PEs:   VLD, VST, VSEND, VRECV
+   vector compute PEs:  VADD, VMUL, VREDSUM, VBCAST, VSEND, VRECV
+   ```
+
+   Otherwise (no `ancho_vector`, or a mesh of one row, which only has the
+   scalar row 0) the mode is `escalar`, and the vector instructions are never
+   emitted. In `vectorial` mode the vector compute PEs do the work in blocks of
+   `W` contiguous elements, and the scalar compute PEs do, at the same time,
+   the elements that do not fill a block (skills 05-07). State the mode, and `W`, in the same line as the
+   mesh.
+6. Treat those values as authoritative and continue without asking, even when
    the mesh does not match the size of the program: a larger mesh leaves its
    extra PEs in `NOP` and a smaller one is handled with tiles, so there is
    nothing to decide. Only a different CGRA that the user states explicitly in
    the same request overrides the file. State in one line which mesh and which
    type map were used, and what that implied.
-6. If the file is missing or invalid, or the mesh has fewer than 3 columns (no
+7. If the file is missing or invalid, or the mesh has fewer than 3 columns (no
    room for a compute PE between the two memory columns), stop and ask the
    user.
 
@@ -176,10 +206,14 @@ mesh_filas=<int, from cgra.json>
 mesh_columnas=<int, from cgra.json>
 palabras_memoria=<int, from cgra.json>
 malla=<one row per line, e.g. M C C M>
-memory_pes=<PE ids of type memoria>
-compute_pes=<PE ids of type computo>
+memory_pes=<PE ids of the memory PEs (M and D)>
+compute_pes=<PE ids of the compute PEs (C and V)>
+vector_compute_pes=<PE ids of the vector compute PEs (V), row-major>
+scalar_compute_pes=<PE ids of the scalar compute PEs (C), row-major>
 tile_filas=<int, filas>
 tile_columnas=<int, columnas - 2>
+modo=<escalar or vectorial>
+ancho_vector=<W from cgra.json, or none in escalar mode>
 salida_filas=<int, from the size constants>
 salida_columnas=<int, from the size constants>
 ```

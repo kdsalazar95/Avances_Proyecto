@@ -162,6 +162,79 @@ ST result[global_fila * S + global_columna], rC          (convolucion)
 Walk the output tile by tile, row of tiles first, and restart the accumulators
 on every tile.
 
+## Vectorial Mode
+
+In `vectorial` mode (manifest, skill 01) the servers and the reduction route do
+not change; only the work units do. `W` is `ancho_vector`. Rows are of one kind,
+so a vector compute PE (`V`) is always served by a vector memory PE (`D`) of its
+row, and a scalar one (`C`) by a scalar one (`M`). Number each class apart, in
+row-major order:
+
+```text
+vector compute PEs:  q = 0 .. P_v - 1      (vector_compute_pes)
+scalar compute PEs:  r = 0 .. P_s - 1      (scalar_compute_pes)
+```
+
+The vector PEs do the blocks and the scalar PEs the tail, **at the same time**:
+they are on different rows, so they never share a link. If there are no scalar
+compute PEs, the vector PEs also do the tail, after their blocks.
+
+### Reduccion
+
+```text
+full blocks:  B = N // W;  block j covers a[jW .. jW+W-1], b[...], c[...]
+              block j -> vector compute PE q = j mod P_v
+tail:         the elements i = B*W .. N-1;  the t-th of them (t = i - B*W)
+              -> scalar compute PE r = t mod P_s, as a scalar iteration
+```
+
+Then every compute PE, vector or scalar, joins the reduction route above with
+its `acc` (the route uses scalar instructions, which both kinds have).
+
+### Matmul and Convolucion
+
+The output is split by rows into **segments** of `W` contiguous columns:
+
+```text
+segs per row = salida_columnas // W
+segment      = (i, j0) with j0 = s * W, s = 0 .. segs - 1, numbered e in
+               row-major order (e = i * segs + s)
+tile t       -> vector compute PE q owns segment e = t * P_v + q
+               (none if e is past the last segment: that pair emits NOP)
+```
+
+In every step of the accumulation the server loads one scalar and one vector
+for its compute PE, and sends both:
+
+```text
+matmul       (N = TAMANO_MATRIZ)
+  rA <- a[i * N + k]                    (LD,  scalar factor)
+  v1 <- b[k * N + j0]                   (VLD, b[k][j0 .. j0+W-1])
+
+convolucion  (I = image side, K = kernel side, S = I - K + 1)
+  rA <- kernel[ki * K + kj]             (LD,  scalar factor)
+  v1 <- imagen[(i + ki) * I + j0 + kj]  (VLD, one piece of an image row)
+```
+
+After the last step, the compute PE sends the segment back and the server
+stores it:
+
+```text
+VST result[i * N + j0], v3          (matmul)
+VST result[i * S + j0], v3          (convolucion)
+```
+
+The **tail** is the columns `j = segs * W .. salida_columnas - 1` of every row.
+Number those elements in row-major order; the `e`-th goes to scalar compute PE
+`e mod P_s` in tile `e // P_s`, and is computed with the scalar operands and
+stores above (`LD rB` instead of `VLD`). The vector tiles and the tail tiles
+run at the same time, on their own rows.
+
+```text
+vector tiles = ceil(salida_filas * segs / P_v)                      (vector PEs)
+tail tiles   = ceil(salida_filas * (salida_columnas - segs * W) / P_s)   (scalar PEs)
+```
+
 ## Sizes That Do Not Match the Mesh
 
 - **Output larger than the compute block:** that is the tiling above. The number
@@ -180,7 +253,8 @@ on every tile.
 server of every compute PE      (memory PE and direction)
 work list per compute PE        (iterations, or output elements per tile)
 memory list per memory PE       (LD/ST it performs for its compute PEs)
-tile list                       (for matmul and convolucion)
+tile list                       (for matmul and convolucion; vector tiles,
+                                 then tail tiles in vectorial mode)
 communication edges             (operand delivery, results, reduction route)
 ```
 
