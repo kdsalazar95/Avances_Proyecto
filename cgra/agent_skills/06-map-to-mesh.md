@@ -70,6 +70,23 @@ one hop per cycle; they relay it through `rT` (`RECV` then `SEND` on the next
 cycle). If a memory PE serves several compute PEs, it serves them one after
 another (skill 07).
 
+### Two Servers (`columnas = 3`)
+
+With `3` columns every row is `memory, compute, memory`: the compute PE
+`PE(f, 1)` is next to both memory PEs, so **both serve it** instead of leaving
+the east one idle:
+
+```text
+west server  PE(f, 0):  loads and sends the first operand            (to C = east)
+east server  PE(f, 2):  loads and sends the second operand,
+                        receives the results and stores them         (to C = west)
+```
+
+The first operand is `a` in reduccion and matmul and the scalar factor in the
+vector steps; the second is `b`, the image pixel or the vector factor. The
+reduction route does not change: its last hop still goes to `PE(0, 0)`, which
+stores `result[0]`. Skill 07 has the tables for this case.
+
 ## Reduccion: Assignment
 
 Number the compute PEs in row-major order (`P_c = filas * (columnas - 2)` of
@@ -175,17 +192,39 @@ vector compute PEs:  q = 0 .. P_v - 1      (vector_compute_pes)
 scalar compute PEs:  r = 0 .. P_s - 1      (scalar_compute_pes)
 ```
 
-The vector PEs do the blocks and the scalar PEs the tail, **at the same time**:
-they are on different rows, so they never share a link. If there are no scalar
-compute PEs, the vector PEs also do the tail, after their blocks.
+The vector PEs and the scalar PEs work **at the same time**: they are on
+different rows, so they never share a link. Split the work so that both groups
+end together: a vector PE is faster, but leaving the scalar rows idle wastes
+them. The cost of one unit comes from the tables of skill 07:
+
+```text
+                         vector unit (W elements)    scalar element
+reduccion                6                           6  (5 with two servers)
+matmul / convolucion     5 * steps + 4               4 * steps + 4
+```
+
+`steps` is the length of the accumulation (`N` in matmul, `K * K` in
+convolucion). Give the vector PEs the first `n` units, and the scalar PEs
+every element they do not cover, with `n` chosen as:
+
+```text
+T_v(n) = ceil(n / P_v) * cost_vector
+T_s(n) = ceil((elements - n * W) / P_s) * cost_scalar
+n      = the value from 0 to the number of whole units that gives the lowest
+         max(T_v(n), T_s(n)); on a tie, the largest n
+```
+
+Try every `n`: there are few. If there are no scalar compute PEs, `n` is every
+whole unit and the vector PEs also do the tail, after their blocks.
 
 ### Reduccion
 
 ```text
-full blocks:  B = N // W;  block j covers a[jW .. jW+W-1], b[...], c[...]
-              block j -> vector compute PE q = j mod P_v
-tail:         the elements i = B*W .. N-1;  the t-th of them (t = i - B*W)
-              -> scalar compute PE r = t mod P_s, as a scalar iteration
+blocks:  the first n blocks (n from the split above, at most N // W);
+         block j covers a[jW .. jW+W-1], b[...], c[...]
+         block j -> vector compute PE q = j mod P_v
+scalar:  the elements i = n*W .. N-1;  the t-th of them (t = i - n*W)
+         -> scalar compute PE r = t mod P_s, as a scalar iteration
 ```
 
 Then every compute PE, vector or scalar, joins the reduction route above with
@@ -199,8 +238,9 @@ The output is split by rows into **segments** of `W` contiguous columns:
 segs per row = salida_columnas // W
 segment      = (i, j0) with j0 = s * W, s = 0 .. segs - 1, numbered e in
                row-major order (e = i * segs + s)
+vector work  = the first n segments (n from the split above)
 tile t       -> vector compute PE q owns segment e = t * P_v + q
-               (none if e is past the last segment: that pair emits NOP)
+               (none if e is past the n-th segment: that pair emits NOP)
 ```
 
 In every step of the accumulation the server loads one scalar and one vector
@@ -224,15 +264,17 @@ VST result[i * N + j0], v3          (matmul)
 VST result[i * S + j0], v3          (convolucion)
 ```
 
-The **tail** is the columns `j = segs * W .. salida_columnas - 1` of every row.
-Number those elements in row-major order; the `e`-th goes to scalar compute PE
-`e mod P_s` in tile `e // P_s`, and is computed with the scalar operands and
-stores above (`LD rB` instead of `VLD`). The vector tiles and the tail tiles
-run at the same time, on their own rows.
+The **scalar work** is every output element that is not in one of those `n`
+segments: the segments left to the scalar rows, and the columns
+`j = segs * W .. salida_columnas - 1` of every row. Number those elements in
+row-major order; the `e`-th goes to scalar compute PE `e mod P_s` in tile
+`e // P_s`, and is computed with the scalar operands and stores above
+(`LD rB` instead of `VLD`). The vector tiles and the scalar tiles run at the
+same time, on their own rows.
 
 ```text
-vector tiles = ceil(salida_filas * segs / P_v)                      (vector PEs)
-tail tiles   = ceil(salida_filas * (salida_columnas - segs * W) / P_s)   (scalar PEs)
+vector tiles = ceil(n / P_v)                                        (vector PEs)
+scalar tiles = ceil((salida_filas * salida_columnas - n * W) / P_s)    (scalar PEs)
 ```
 
 ## Sizes That Do Not Match the Mesh
@@ -250,11 +292,11 @@ tail tiles   = ceil(salida_filas * (salida_columnas - segs * W) / P_s)   (scalar
 ## Outputs
 
 ```text
-server of every compute PE      (memory PE and direction)
+server of every compute PE      (memory PE and direction; west and east with 3 columns)
 work list per compute PE        (iterations, or output elements per tile)
 memory list per memory PE       (LD/ST it performs for its compute PEs)
 tile list                       (for matmul and convolucion; vector tiles,
-                                 then tail tiles in vectorial mode)
+                                 and scalar tiles in vectorial mode, with the split n)
 communication edges             (operand delivery, results, reduction route)
 ```
 

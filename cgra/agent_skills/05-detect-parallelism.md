@@ -36,8 +36,10 @@ and which must be reduced or serialized.
    the reduction in original index order instead of reducing across the mesh.
 7. In `vectorial` mode (manifest, skill 01), group the work in **blocks of `W`
    contiguous elements** for the vector compute PEs, and keep the scalar work
-   units above for the elements that do not fill a block (the tail), which go
-   to the scalar compute PEs. Both run at the same time, each on its own rows. A `VLD`/`VST` only reads or writes
+   units above for the scalar compute PEs. Both run at the same time, each on
+   its own rows, and the work is split between them by cost so that they end
+   together (skill 06): the scalar rows do the elements that do not fill a
+   block, and also whole blocks when that makes the run shorter. A `VLD`/`VST` only reads or writes
    contiguous words, so every block must be contiguous in memory:
    - **map loop:** a block is `W` consecutive iterations (`c[i:i+W]`).
    - **reduction loop:** each block is reduced inside the compute PE with

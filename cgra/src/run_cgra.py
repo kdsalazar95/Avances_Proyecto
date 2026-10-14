@@ -123,7 +123,7 @@ class SimuladorCGRA:
 
         # 4. Reportar. El reporte de ciclos se guarda en todas las corridas,
         #    en la carpeta del programa, y se reescribe en la siguiente.
-        reporte = ReporteCiclos(programa_cargado, cgra.malla, str(carpeta), formas)
+        reporte = ReporteCiclos(programa_cargado, cgra.malla, str(carpeta), formas, cgra.formato)
         if mostrar_ciclos:
             reporte.mostrar()
         ruta_reporte = Path(ruta_reporte) if ruta_reporte else carpeta / "reporte_ciclos.txt"

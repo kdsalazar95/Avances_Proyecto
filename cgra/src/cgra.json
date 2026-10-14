@@ -1,7 +1,7 @@
 {
   "descripcion": "Formato de la CGRA: tamaño de la malla, memoria, ancho de los vectores y tipos de PE. Las filas alternan: las pares son escalares (M, C) y las impares vectoriales (D, V); en cada fila los bordes oeste y este son de memoria y el resto de cómputo. Lo leen run_cgra.py (src/formato_cgra.py) y los skills (agent_skills/01-receive-inputs.md).",
-  "filas": 9,
-  "columnas": 9,
+  "filas": 3,
+  "columnas": 3,
   "palabras_memoria": 4096,
   "ancho_vector": 4,
   "tipos_pe": {

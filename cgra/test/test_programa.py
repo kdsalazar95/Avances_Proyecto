@@ -125,6 +125,22 @@ class TestEstadisticasCiclos(ConReduccion2x2):
 
         self.assertIn("no manda datos entre PEs", texto)
 
+    def test_6_muestra_las_instrucciones_de_cada_pe(self):
+        """El reporte debe tener, por PE, cuántas instrucciones de cada categoría ejecuta, y el detalle de cada instrucción con su cantidad."""
+        texto = "\n".join(ReporteCiclos(self.programa, self.malla).lineas())
+
+        self.assertIn("Instrucciones por PE", texto)
+        self.assertIn("PE00 (-): MOV x1, LD x9, ST x4, ADD x8, RECV x2", texto)
+        self.assertIn("PE01 (-): MOV x1, LD x9, ST x3, ADD x6, SEND x1", texto)
+
+    def test_7_muestra_que_pe_accede_a_que_posiciones_de_memoria(self):
+        """El reporte debe decir qué regiones lee y escribe cada PE, en qué posiciones y cuántas veces."""
+        texto = "\n".join(ReporteCiclos(self.programa, self.malla).lineas())
+
+        self.assertIn("PE00 (-): lee a[0, 4, 8] (3 lecturas); lee b[0, 4, 8] (3 lecturas); "
+                      "lee c[0, 4, 8] (3 lecturas); escribe c[0, 4, 8] (3 escrituras); "
+                      "escribe result[0] (1 escritura)", texto)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ from isa import ISA
 from malla import PE, Malla
 from memoria import ImagenMemoria
 from programa import Programa
+from reporte_ciclos import ReporteCiclos
 
 # Tipos M/C con sus instrucciones vectoriales: M carga y envía, C calcula.
 TIPOS_VECTORIALES = {
@@ -150,7 +151,7 @@ class TestCGRAVectorial(unittest.TestCase):
             generar_malla(2, 4, {**distribucion, "resto": "C"})
 
     def test_5_suma_vectorial_de_punta_a_punta(self):
-        """Con un M y un C vectoriales (vectores de 4), el programa debe calcular c = a + b y result = 396, en 17 ciclos."""
+        """Con un M y un C vectoriales (vectores de 4), el programa debe calcular c = a + b y result = 396, en 17 ciclos, y el reporte mostrar qué lee cada PE y qué instrucciones ejecuta."""
         a = [1, 2, 3, 4, 5, 6, 7, 8]
         b = [10, 20, 30, 40, 50, 60, 70, 80]
         with tempfile.TemporaryDirectory() as directorio:
@@ -169,6 +170,9 @@ class TestCGRAVectorial(unittest.TestCase):
             cgra.ejecutar(programa)
 
         self.assertEqual(len(programa.ciclos()), 17)
+        reporte = "\n".join(ReporteCiclos(programa, cgra.malla, formato=cgra.formato).lineas())
+        self.assertIn("PE00 (memoria): lee a[0..7] (8 lecturas)", reporte)
+        self.assertIn("PE01 (computo): MOV x1, ADD x2, SEND x1, VADD x2, VREDSUM x2, VSEND x2, VRECV x4", reporte)
         self.assertEqual(cgra.memoria.region("c"), [x + y for x, y in zip(a, b)])
         self.assertEqual(cgra.memoria.region("result"), [396])
 

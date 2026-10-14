@@ -69,7 +69,8 @@ The tables below are for a compute PE **next to its server** that is the only
 compute PE of that server, as with two compute columns (skill 06). `<to C>` is
 the direction from the server to its compute PE (`east` for a west server,
 `west` for an east server) and `<to M>` is the opposite one. All server/compute
-pairs run the same table at the same time. With more compute columns, see
+pairs run the same table at the same time. With `3` columns, see
+[Two Servers](#two-servers); with more than two compute columns, see
 [Shared or Distant Servers](#shared-or-distant-servers).
 
 ## Reduccion Schedule
@@ -154,7 +155,8 @@ matmul and `4 * 16 + 4 = 68` in a convolution with a `4x4` kernel.
 These tables follow the vector work units of skill 06, for a vector compute PE
 (`V`) next to its vector server (`D`), as the scalar tables above. The scalar
 rows run the scalar tables at the same time. Every table was checked in the
-simulator, alone and with scalar and vector rows together.
+simulator, alone and with scalar and vector rows together. With `3` columns
+use the tables of [Two Servers](#two-servers) instead.
 
 ### Reduccion
 
@@ -177,9 +179,10 @@ simulator, alone and with scalar and vector rows together.
    - After the last block, two closing cycles: the server emits
      `VST c[last i], v2` and then `NOP`; the compute PE emits `VREDSUM rC, v2`
      and then `ADD acc, acc, rC`.
-2. Tail elements, on the scalar compute PEs (skill 06), with the scalar 6-cycle
-   step of [Reduccion Schedule](#reduccion-schedule) and its closing cycle,
-   in the same cycles as the blocks of the vector rows.
+2. Scalar elements (the ones left by the split of skill 06), on the scalar
+   compute PEs, with the scalar 6-cycle step of
+   [Reduccion Schedule](#reduccion-schedule) and its closing cycle, in the same
+   cycles as the blocks of the vector rows.
    - Only if there are no scalar compute PEs, the vector compute PEs do the
      tail after their blocks: in the first tail step the compute PE emits
      `NOP` at `t+0` instead of `ADD` (there is no previous scalar element) and
@@ -221,11 +224,83 @@ e+3   | VST  result[...], v3        | NOP
 ```
 
 A vector tile lasts `5 * steps + 4` cycles; a pair with no segment in the tile
-emits `NOP` on both PEs for all of it. The tail tiles of skill 06 run at the
+emits `NOP` on both PEs for all of it. The scalar tiles of skill 06 run at the
 same time on the scalar rows, with the scalar table of
 [Matmul and Convolucion Tile Schedule](#matmul-and-convolucion-tile-schedule)
 (`4 * steps + 4` cycles each). The group that finishes first pads with `NOP`
 until the other one ends.
+
+## Two Servers
+
+With `3` columns each compute PE has a server on each side (skill 06): the west
+one (`O`) sends the first operand, and the east one (`E`) sends the second and
+stores the results. `C` is the compute PE. Every table was checked in the
+simulator.
+
+### Reduccion, scalar: 5-cycle step
+
+```text
+cycle | west (O)          | east (E)               | compute (C)
+------+-------------------+------------------------+------------------------------
+t+0   | LD   rA, a[i]     | LD   rB, b[i]          | ADD  acc, acc, rC  (previous i)
+t+1   | SEND east, rA     | NOP                    | RECV west, rA
+t+2   | NOP               | SEND west, rB          | RECV east, rB
+t+3   | NOP               | ST   c[previous i], rC | ADD  rC, rA, rB
+t+4   | NOP               | RECV west, rC          | SEND east, rC
+```
+
+First step: `MOV acc, 0.0` in `C` at `t+0` and `NOP` in `E` at `t+3`. One
+closing cycle: `E` emits `ST c[last i], rC` and `C` emits `ADD acc, acc, rC`.
+
+### Reduccion, vector: 6-cycle step
+
+```text
+cycle | west (O)          | east (E)               | compute (C)
+------+-------------------+------------------------+------------------------------
+t+0   | VLD  v0, a[i]     | VLD  v1, b[i]          | VREDSUM rC, v2    (previous block)
+t+1   | VSEND east, v0    | NOP                    | VRECV west, v0
+t+2   | NOP               | VSEND west, v1         | VRECV east, v1
+t+3   | NOP               | VST  c[previous i], v2 | ADD  acc, acc, rC (previous block)
+t+4   | NOP               | NOP                    | VADD v2, v0, v1
+t+5   | NOP               | VRECV west, v2         | VSEND east, v2
+```
+
+First step: `MOV acc, 0.0` in `C` at `t+0`, `NOP` in `C` and in `E` at `t+3`.
+Two closing cycles: `E` emits `VST c[last i], v2` and `NOP`; `C` emits
+`VREDSUM rC, v2` and `ADD acc, acc, rC`.
+
+### Matmul and Convolucion, scalar: 4-cycle step
+
+```text
+cycle | west (O)            | east (E)            | compute (C)
+------+---------------------+---------------------+------------------------------
+t+0   | LD   rA, <operand A>| LD   rB, <operand B>| MUL  rC, rA, rB    (previous step)
+t+1   | SEND east, rA       | NOP                 | RECV west, rA
+t+2   | NOP                 | NOP                 | ADD  acc, acc, rC  (previous step)
+t+3   | NOP                 | SEND west, rB       | RECV east, rB
+```
+
+First step of a tile: `NOP` in `C` at `t+0` and `MOV acc, 0.0` at `t+2`. Close
+the tile in 4 cycles: `C` emits `MUL rC, rA, rB`, `ADD acc, acc, rC`,
+`SEND east, acc`, `NOP`; `E` emits `NOP`, `NOP`, `RECV west, rC`,
+`ST result[...], rC`; `O` emits `NOP`.
+
+### Matmul and Convolucion, vector: 5-cycle step
+
+```text
+cycle | west (O)                 | east (E)                  | compute (C)
+------+--------------------------+---------------------------+--------------------------
+t+0   | LD   rA, <scalar factor> | VLD  v1, <vector factor>  | VMUL v2, v0, v1 (previous step)
+t+1   | SEND east, rA            | NOP                       | RECV west, rA
+t+2   | NOP                      | NOP                       | VADD v3, v3, v2 (previous step)
+t+3   | NOP                      | VSEND west, v1            | VRECV east, v1
+t+4   | NOP                      | NOP                       | VBCAST v0, rA
+```
+
+First step of a tile: `MOV rT, 0.0` in `C` at `t+0` and `VBCAST v3, rT` at
+`t+2`. Close the tile in 4 cycles: `C` emits `VMUL v2, v0, v1`,
+`VADD v3, v3, v2`, `VSEND east, v3`, `NOP`; `E` emits `NOP`, `NOP`,
+`VRECV west, v3`, `VST result[...], v3`; `O` emits `NOP`.
 
 ## Shared or Distant Servers
 
