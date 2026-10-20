@@ -37,14 +37,16 @@ VRECV   dir, vreg
 The instructions a PE may emit depend on its type (`src/cgra.json`, skill 01):
 
 ```text
-memoria (M): NOP, MOV, LD, ST, SEND, RECV
-computo (C): NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV
+memoria (M):   NOP, MOV, LD, ST, SEND, RECV, VLD, VST, VSEND, VRECV
+escalar (E):   NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV
+vectorial (V): NOP, MOV, SEND, RECV, VADD, VSUB, VMUL, VDIV, VREDSUM, VBCAST, VSEND, VRECV
+computo (C):   E + V
 ```
 
-In `vectorial` mode the types also have their vector instructions (memory PEs:
-`VLD`, `VST`, `VSEND`, `VRECV`; compute PEs: `VADD`, `VMUL`, `VREDSUM`,
-`VBCAST`, `VSEND`, `VRECV`, ...): take the exact lists from the map printed in
-skill 01.
+The vector instructions are only emitted in `vectorial` mode: take the exact
+lists from the map printed in skill 01. In the tables below, `M` is a memory
+PE and `C` the compute PE that runs the column (an `E` for the scalar tables,
+a `V` or `C` for the vector ones).
 
 Never emit an instruction outside the type of the PE: `run_cgra.py` refuses to
 load the program and reports the PE and cycle.
@@ -153,8 +155,8 @@ matmul and `4 * 16 + 4 = 68` in a convolution with a `4x4` kernel.
 ## Vectorial Mode Schedules
 
 These tables follow the vector work units of skill 06, for a vector compute PE
-(`V`) next to its vector server (`D`), as the scalar tables above. The scalar
-rows run the scalar tables at the same time. Every table was checked in the
+(`V` or `C`) next to its server (`M`), as the scalar tables above. The scalar
+compute PEs (`E`) run the scalar tables at the same time. Every table was checked in the
 simulator, alone and with scalar and vector rows together. With `3` columns
 use the tables of [Two Servers](#two-servers) instead.
 
@@ -183,7 +185,7 @@ use the tables of [Two Servers](#two-servers) instead.
    compute PEs, with the scalar 6-cycle step of
    [Reduccion Schedule](#reduccion-schedule) and its closing cycle, in the same
    cycles as the blocks of the vector rows.
-   - Only if there are no scalar compute PEs, the vector compute PEs do the
+   - Only if there are no scalar compute PEs (`E`), the vector compute PEs do the
      tail after their blocks: in the first tail step the compute PE emits
      `NOP` at `t+0` instead of `ADD` (there is no previous scalar element) and
      the server `NOP` at `t+4`.

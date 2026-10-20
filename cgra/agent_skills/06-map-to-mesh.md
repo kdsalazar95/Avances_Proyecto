@@ -15,8 +15,10 @@ of the manifest (`malla`).
 memory PEs:   PE(f, 0) and PE(f, columnas - 1)       for 0 <= f <= filas - 1
 compute PEs:  PE(f, c) with 1 <= c <= columnas - 2   (the compute block)
 
-M = memoria: LD, ST, SEND, RECV, MOV, NOP               (moves data, never computes)
-C = computo: ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP   (never touches memory)
+M = memoria:   LD, ST, VLD, VST, SEND, RECV, VSEND, VRECV, MOV, NOP  (moves data, never computes)
+E = escalar:   ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP              (scalar only, never touches memory)
+V = vectorial: VADD..VDIV, VREDSUM, VBCAST, SEND, RECV, VSEND, VRECV, MOV, NOP  (vector only)
+C = computo:   E + V                                                 (scalar and vector)
 ```
 
 `PE{fila}{columna}` is connected only to its north, south, east, and west
@@ -182,10 +184,12 @@ on every tile.
 ## Vectorial Mode
 
 In `vectorial` mode (manifest, skill 01) the servers and the reduction route do
-not change; only the work units do. `W` is `ancho_vector`. Rows are of one kind,
-so a vector compute PE (`V`) is always served by a vector memory PE (`D`) of its
-row, and a scalar one (`C`) by a scalar one (`M`). Number each class apart, in
-row-major order:
+not change; only the work units do. `W` is `ancho_vector`. The memory PEs (`M`)
+serve both scalars and vectors, so every compute PE is served by the `M` of its
+row as before. A vector compute PE (`V` or `C`) does the blocks of `W` elements
+(a `C` may also use scalar instructions, e.g. to accumulate `VREDSUM` results)
+and a scalar one (`E`) the scalar units. Number each class apart, in row-major
+order:
 
 ```text
 vector compute PEs:  q = 0 .. P_v - 1      (vector_compute_pes)

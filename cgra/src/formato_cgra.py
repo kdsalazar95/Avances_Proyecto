@@ -153,8 +153,8 @@ def generar_malla(filas, columnas, distribucion):
     ``distribucion`` es una regla (``{"oeste": "M", "este": "M", "resto": "C"}``)
     o una regla por paridad de fila, para alternar filas de tipos distintos:
 
-        {"filas_pares":   {"oeste": "M", "este": "M", "resto": "C"},
-         "filas_impares": {"oeste": "D", "este": "D", "resto": "V"}}
+        {"filas_pares":   {"oeste": "M", "este": "M", "resto": "E"},
+         "filas_impares": {"oeste": "M", "este": "M", "resto": "C"}}
     """
     if set(distribucion) & set(PARIDADES):
         desconocidas = set(distribucion) - set(PARIDADES)
