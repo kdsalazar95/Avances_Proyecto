@@ -21,10 +21,18 @@ size is an example):
   "palabras_memoria": <palabras>,
   "ancho_vector": <W>,
   "tipos_pe": {
-    "M": {"nombre": "memoria", "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV"]},
-    "C": {"nombre": "computo", "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]}
+    "M": {"nombre": "memoria",   "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV", "VLD", "VST", "VSEND", "VRECV"]},
+    "E": {"nombre": "escalar",   "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]},
+    "V": {"nombre": "vectorial", "instrucciones": ["NOP", "MOV", "SEND", "RECV", "VADD", "...", "VSEND", "VRECV"]},
+    "C": {"nombre": "computo",   "instrucciones": ["NOP", "MOV", "ADD", "...", "VADD", "...", "VSEND", "VRECV"]}
   },
-  "distribucion": {"oeste": "M", "este": "M", "resto": "C"}
+  "distribucion": {
+    "ciclo_filas": [
+      {"oeste": "M", "este": "M", "resto": "E"},
+      {"oeste": "M", "este": "M", "resto": "V"},
+      {"oeste": "M", "este": "M", "resto": "C"}
+    ]
+  }
 }
 ```
 
@@ -47,28 +55,34 @@ size is an example):
    A PE never executes an instruction outside its type; `run_cgra.py` refuses
    to load a program that does.
 3. Classify every PE as a **memory PE** (its type has `LD`/`ST`) or a
-   **compute PE** (its type has `ADD`/`MUL`), and each of them as **scalar** or
-   **vector** (its type also has the `V...` instructions). The `distribucion`
-   places them: in every row the west and east columns are memory PEs, which
-   can read and write the data memory and send data to their neighbors, and
-   every other PE is a compute PE, which only executes instructions and never
-   touches memory. With `filas_pares` / `filas_impares`, the rows alternate:
-   even rows (row 0 first) are scalar and odd rows are vector:
+   **compute PE** (its type has arithmetic). The west and east columns are
+   only memory PEs (`M`), which read and write the data memory, scalars and
+   vectors, and send data to their neighbors; every other PE is a compute PE,
+   which only executes instructions and never touches memory. A compute PE is
+   **scalar** if its type has `ADD`..`DIV`, **vector** if it has
+   `VADD`..`VBCAST`, or both. With `ciclo_filas` the rows repeat its rules in
+   order (row `f` takes rule `f mod` their count); the default rotates
+   `escalar`, `vectorial`, `computo`:
 
    ```text
    memory PEs:   PE(f, 0) and PE(f, columnas - 1), for every row f
    compute PEs:  PE(f, c) with 1 <= c <= columnas - 2
-   even rows f:  M (memoria escalar)   C (computo escalar)
-   odd rows f:   D (memoria vectorial) V (computo vectorial)
+   f mod 3 = 0:  M E E ... E M
+   f mod 3 = 1:  M V V ... V M
+   f mod 3 = 2:  M C C ... C M
 
-   M: NOP, MOV, LD, ST, SEND, RECV                    -> moves data, never computes
-   C: NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV        -> computes, never touches memory
-   D: M + VLD, VST, VSEND, VRECV
-   V: C + VADD, VSUB, VMUL, VDIV, VREDSUM, VBCAST, VSEND, VRECV
+   M (memoria):   NOP, MOV, LD, ST, VLD, VST, SEND, RECV, VSEND, VRECV  -> moves data, never computes
+   E (escalar):   NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV             -> scalar arithmetic only
+   V (vectorial): NOP, MOV, SEND, RECV, VADD, VSUB, VMUL, VDIV,
+                  VREDSUM, VBCAST, VSEND, VRECV                        -> vector arithmetic only
+   C (computo):   E + V                                                -> scalar and vector
    ```
 
-   A vector PE also has the scalar instructions of its class. If the
-   `distribucion` is a single rule (no `filas_pares`), every row is alike.
+   `V` keeps `SEND`/`RECV` only to move the scalars of `VREDSUM`/`VBCAST`
+   and to relay values; it never adds scalars (skills 06 and 07 say how a `V`
+   row takes part in a reduction). `distribucion` may also be
+   `filas_pares` / `filas_impares` (two alternating rules) or a single rule
+   (every row alike).
 
    Use the map printed by the command above as the picture of the CGRA for this
    run; the later skills apply their rules to it.
@@ -80,18 +94,19 @@ size is an example):
    `memoria.bin` of the program must fit in it.
 5. Decide the **mode** of the run. It is `vectorial` when the file has
    `ancho_vector` (`W`, the words of every vector register) **and** the map has
-   vector compute PEs served by vector memory PEs, with the vector
+   vector compute PEs (`V` or `C`) next to memory PEs, with the vector
    instructions the vector schedules use:
 
    ```text
-   vector memory PEs:   VLD, VST, VSEND, VRECV
-   vector compute PEs:  VADD, VMUL, VREDSUM, VBCAST, VSEND, VRECV
+   memory PEs (M):          VLD, VST, VSEND, VRECV
+   vector compute PEs:      VADD, VMUL, VREDSUM, VBCAST, VSEND, VRECV
    ```
 
    Otherwise (no `ancho_vector`, or a mesh of one row, which only has the
-   scalar row 0) the mode is `escalar`, and the vector instructions are never
-   emitted. In `vectorial` mode the vector compute PEs do the work in blocks of
-   `W` contiguous elements, and the scalar compute PEs do, at the same time,
+   `escalar` row 0) the mode is `escalar`, and the vector instructions are never
+   emitted. In `vectorial` mode the vector compute PEs (`V`, `C`) do the work in
+   blocks of `W` contiguous elements, and the scalar compute PEs (`E`) do, at
+   the same time,
    the elements that do not fill a block (skills 05-07). State the mode, and `W`, in the same line as the
    mesh.
 6. Treat those values as authoritative and continue without asking, even when
@@ -177,9 +192,12 @@ The mesh and the problem do **not** have to match:
 3. Set `output_dir` to the operation's folder, `programas/<operacion>/`. The
    IR, the graphs, and `memoria.bin` are generated there, and the PE files go
    to `programas/<operacion>/pe_instructions/` (skill 08).
-4. Check whether the `.ll`, the two `.dot` graphs, and `memoria.bin` already
-   exist in that folder, and treat missing or stale ones as rebuildable
-   artifacts.
+4. Check whether the `.ll`, the two `.dot` graphs, `memoria.bin` and
+   `pe_instructions/` already exist. They are generated artifacts: regenerate
+   them on every invocation from the current source and CGRA configuration.
+   Existing files, missing PEs or a mismatch with the previous mesh are reasons
+   to rebuild, never reasons to stop or ask for confirmation. Skill 08 overwrites
+   every PE file and removes obsolete generated PE files.
 5. Record the mesh size and the type map read from `cgra.json`. Pass them to
    every later skill; do not hard-code a size or a type map downstream.
 6. Only compute PEs own work. The tile of skill 06 is therefore the **compute
@@ -205,11 +223,11 @@ cgra=src/cgra.json
 mesh_filas=<int, from cgra.json>
 mesh_columnas=<int, from cgra.json>
 palabras_memoria=<int, from cgra.json>
-malla=<one row per line, e.g. M C C M>
-memory_pes=<PE ids of the memory PEs (M and D)>
-compute_pes=<PE ids of the compute PEs (C and V)>
-vector_compute_pes=<PE ids of the vector compute PEs (V), row-major>
-scalar_compute_pes=<PE ids of the scalar compute PEs (C), row-major>
+malla=<one row per line, e.g. M E E M>
+memory_pes=<PE ids of the memory PEs (M)>
+compute_pes=<PE ids of the compute PEs (E, V and C)>
+vector_compute_pes=<PE ids of the vector compute PEs (V and C), row-major>
+scalar_compute_pes=<PE ids of the scalar-only compute PEs (E), row-major>
 tile_filas=<int, filas>
 tile_columnas=<int, columnas - 2>
 modo=<escalar or vectorial>
@@ -230,7 +248,9 @@ convolucion   error    skill <NN>: <the error, in one line>
 
 ## Notes
 
-Do not assume the existing `.ll`, graph, or `memoria.bin` files are current. If
-a `#define` or the operation's code changed since they were produced, regenerate them in
-skills 02 and 03, and regenerate the PE files too: a schedule is only valid for
-the sizes it was built from.
+Do not assume existing artifacts are current. Rebuild them in skills 02 to 08
+and validate them in skill 09 on every invocation. A change to a `#define`, the
+operation's code, or `cgra.json` (mesh size, distribution or explicit map, PE
+instruction lists, vector width, or memory capacity) invalidates the previous
+schedule. The current source defines the computation and initial memory;
+`cgra.json` defines the hardware it must run on.

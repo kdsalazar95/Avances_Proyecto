@@ -9,6 +9,7 @@ from malla import Malla
 RUTA_POR_DEFECTO = Path(__file__).with_name("cgra.json")
 BORDES = ("norte", "sur", "oeste", "este")
 PARIDADES = ("filas_pares", "filas_impares")  # la fila 0 es par
+CICLO = "ciclo_filas"
 INSTRUCCIONES_ISA = ISA.INSTRUCCIONES
 
 
@@ -150,12 +151,28 @@ class FormatoCGRA:
 def generar_malla(filas, columnas, distribucion):
     """Genera una cuadrícula de tipos usando reglas para bordes y resto.
 
-    ``distribucion`` es una regla (``{"oeste": "M", "este": "M", "resto": "C"}``)
-    o una regla por paridad de fila, para alternar filas de tipos distintos:
+    ``distribucion`` es una regla (``{"oeste": "M", "este": "M", "resto": "C"}``),
+    una regla por paridad de fila, para alternar filas de tipos distintos:
 
-        {"filas_pares":   {"oeste": "M", "este": "M", "resto": "C"},
-         "filas_impares": {"oeste": "D", "este": "D", "resto": "V"}}
+        {"filas_pares":   {"oeste": "M", "este": "M", "resto": "E"},
+         "filas_impares": {"oeste": "M", "este": "M", "resto": "C"}}
+
+    o un ciclo de reglas que se repite fila por fila (la fila f usa la regla
+    f mod la cantidad de reglas):
+
+        {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": "E"},
+                         {"oeste": "M", "este": "M", "resto": "V"},
+                         {"oeste": "M", "este": "M", "resto": "C"}]}
     """
+    if CICLO in distribucion:
+        if len(distribucion) != 1:
+            raise ValueError(f"'distribucion' mezcla {CICLO} con otras claves")
+        reglas = distribucion[CICLO]
+        if not isinstance(reglas, list) or not reglas:
+            raise ValueError(f"'{CICLO}' debe ser una lista con al menos una regla")
+        por_regla = [generar_malla(filas, columnas, regla) for regla in reglas]
+        return [por_regla[fila % len(reglas)][fila] for fila in range(filas)]
+
     if set(distribucion) & set(PARIDADES):
         desconocidas = set(distribucion) - set(PARIDADES)
         if desconocidas:

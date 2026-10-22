@@ -8,6 +8,9 @@ respect mesh communication.
 ## Checks
 
 1. All `filas * columnas` PE files exist, one per PE of the mesh.
+   Compare the complete set of generated `PE*.txt` filenames with the expected
+   IDs: no obsolete PE files may remain. `Programa.leer()` reads only expected
+   IDs, so successful loading alone does not detect obsolete extra files.
 2. All files cover the same cycle range.
 3. Each cycle has exactly one instruction per PE.
 4. Every `SEND` has a matching neighbor `RECV`, and every `VSEND` a matching
@@ -31,7 +34,8 @@ respect mesh communication.
     load it with `ImagenMemoria.leer()` of `src/memoria.py`.
 12. Every PE only uses instructions of its type in `src/cgra.json`: no `LD`/`ST`
     in a compute PE, no `ADD`/`SUB`/`MUL`/`DIV` in a memory PE, and the same for
-    the vector forms: vector instructions only in the vector PEs (`D`, `V`). In
+    the vector forms: `VLD`/`VST` only in memory PEs (`M`), vector arithmetic only
+    in `V` and `C`, no scalar arithmetic in `V` and no vector one in `E`. In
     `escalar` mode there is no vector instruction at all.
 13. `memoria.bin` fits in `palabras_memoria` of `src/cgra.json`.
 

@@ -37,7 +37,7 @@ Each file must contain one instruction per execution cycle:
 ```text
 // PE00 instruction list
 // Mesh position: fila 0, columna 0
-// PE type: memoria (M) - NOP, MOV, LD, ST, SEND, RECV
+// PE type: memoria (M) - NOP, MOV, LD, ST, SEND, RECV, VLD, VST, VSEND, VRECV
 // One instruction per execution cycle.
 
 00: LD rA, a[0]
@@ -52,14 +52,20 @@ instructions that file may contain.
 ## Actions
 
 1. Create `programas/<operacion>/pe_instructions/` if needed.
-2. Write cycle-numbered instructions for each PE.
+2. Generate the complete instruction streams from the current manifest, then
+   write cycle-numbered instructions for every PE, overwriting existing files
+   in full (truncate; never append). Their existence or an old header is not a
+   reason to skip generation. Remove only obsolete generated `PE*.txt` files
+   from this operation's `pe_instructions/` whose names are outside the current
+   mesh's expected set. This also covers a smaller mesh or a change in the
+   coordinate padding width. Leave other files and operations alone.
 3. Keep cycle numbers aligned across all files.
 4. Include `NOP` instructions for idle cycles so every file has the same cycle
    range.
 5. Write in each file only instructions of the PE's type (`src/cgra.json`):
-   `LD`/`ST` only in memory PEs, `ADD`/`SUB`/`MUL`/`DIV` only in compute PEs,
-   and the same for their vector forms (`VLD`/`VST`, `VADD`/...) in
-   `vectorial` mode.
+   `LD`/`ST` (and `VLD`/`VST`) only in memory PEs (`M`), `ADD`/`SUB`/`MUL`/`DIV`
+   only in `escalar` and `computo` PEs (`E`, `C`), and `VADD`/... only in
+   `vectorial` and `computo` PEs (`V`, `C`), in `vectorial` mode.
 6. Use in `LD`/`ST` (and `VLD`/`VST`) only the bank names of the regions in `memoria.bin`
    (skill 02), with indices inside each region (`filas * columnas` words); a
    `VLD`/`VST` at index `i` uses `i .. i + W - 1`, so all of them must be

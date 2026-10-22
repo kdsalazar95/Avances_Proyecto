@@ -37,14 +37,16 @@ VRECV   dir, vreg
 The instructions a PE may emit depend on its type (`src/cgra.json`, skill 01):
 
 ```text
-memoria (M): NOP, MOV, LD, ST, SEND, RECV
-computo (C): NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV
+memoria (M):   NOP, MOV, LD, ST, SEND, RECV, VLD, VST, VSEND, VRECV
+escalar (E):   NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV
+vectorial (V): NOP, MOV, SEND, RECV, VADD, VSUB, VMUL, VDIV, VREDSUM, VBCAST, VSEND, VRECV
+computo (C):   E + V
 ```
 
-In `vectorial` mode the types also have their vector instructions (memory PEs:
-`VLD`, `VST`, `VSEND`, `VRECV`; compute PEs: `VADD`, `VMUL`, `VREDSUM`,
-`VBCAST`, `VSEND`, `VRECV`, ...): take the exact lists from the map printed in
-skill 01.
+The vector instructions are only emitted in `vectorial` mode: take the exact
+lists from the map printed in skill 01. In the tables below, `M` is a memory
+PE and `C` the compute PE that runs the column (an `E` for the scalar tables,
+a `V` or `C` for the vector ones).
 
 Never emit an instruction outside the type of the PE: `run_cgra.py` refuses to
 load the program and reports the PE and cycle.
@@ -153,8 +155,8 @@ matmul and `4 * 16 + 4 = 68` in a convolution with a `4x4` kernel.
 ## Vectorial Mode Schedules
 
 These tables follow the vector work units of skill 06, for a vector compute PE
-(`V`) next to its vector server (`D`), as the scalar tables above. The scalar
-rows run the scalar tables at the same time. Every table was checked in the
+(`V` or `C`) next to its server (`M`), as the scalar tables above. The scalar
+compute PEs (`E`) run the scalar tables at the same time. Every table was checked in the
 simulator, alone and with scalar and vector rows together. With `3` columns
 use the tables of [Two Servers](#two-servers) instead.
 
@@ -179,17 +181,34 @@ use the tables of [Two Servers](#two-servers) instead.
    - After the last block, two closing cycles: the server emits
      `VST c[last i], v2` and then `NOP`; the compute PE emits `VREDSUM rC, v2`
      and then `ADD acc, acc, rC`.
+   - A `V` compute PE (no scalar `ADD`) accumulates the blocks in `v4`
+     instead: at `t+0` it emits `VADD v4, v4, v2` (previous block) instead
+     of `VREDSUM`, and `NOP` at `t+2`. In the first block it clears `v4` with
+     `MOV rT, 0.0` at `t+0` and `VBCAST v4, rT` at `t+2`. Its two closing
+     cycles are `VADD v4, v4, v2` and `NOP`. A `V` with no blocks emits
+     `MOV rT, 0.0`, `VBCAST v4, rT`.
 2. Scalar elements (the ones left by the split of skill 06), on the scalar
    compute PEs, with the scalar 6-cycle step of
    [Reduccion Schedule](#reduccion-schedule) and its closing cycle, in the same
    cycles as the blocks of the vector rows.
-   - Only if there are no scalar compute PEs, the vector compute PEs do the
-     tail after their blocks: in the first tail step the compute PE emits
+   - Only if there are no scalar compute PEs (`E`), the `C` compute PEs do the
+     tail after their blocks (a `V` cannot: it has no scalar `ADD`): in the first tail step the compute PE emits
      `NOP` at `t+0` instead of `ADD` (there is no previous scalar element) and
      the server `NOP` at `t+4`.
 3. A compute PE with no blocks and no tail elements emits `MOV acc, 0.0` once.
    Pairs pad with `NOP` so all of them reach the reduction route together; the
-   route and the store are the scalar ones.
+   route and the store are the scalar ones, except in `V` rows (skill 06):
+
+   ```text
+   row hop, V row:    t: VSEND west, v4   / VRECV east, v5
+                      t+1: NOP            / VADD v4, v4, v5
+   after row hops:    PE(f, 1) of a V row: VREDSUM acc, v4    (1 cycle)
+   column hop into V: t: SEND north, acc  / RECV south, rT     (V keeps it)
+   hops out of a V:   t: SEND north, rT   / RECV south, rT
+                      t+1: NOP            / ADD acc, acc, rT
+                      t+2: SEND north, acc/ RECV south, rT
+                      t+3: NOP            / ADD acc, acc, rT
+   ```
 
 ### Matmul and Convolucion
 
@@ -210,6 +229,7 @@ t+4   | NOP                         | VBCAST v0, rA
 
 - In the first step of a tile, the compute PE clears `v3`: `MOV rT, 0.0` at
   `t+0` and `VBCAST v3, rT` at `t+2`.
+- The table has no scalar arithmetic, so `V` and `C` run it the same way.
 - The factors are the ones of skill 06.
 
 After the last step, close the tile in 4 cycles:
@@ -346,6 +366,8 @@ v0   first vector operand (a block of a; the scalar factor copied to every lane)
 v1   second vector operand (a block of b; the vector factor)
 v2   vector result (a block of c; the product of a step)
 v3   vector accumulation of an output segment
+v4   vector partial sum of a V PE (reduccion)
+v5   received vector partial sum (reduction route of a V row)
 v7   relayed vector (shared or distant servers)
 ```
 

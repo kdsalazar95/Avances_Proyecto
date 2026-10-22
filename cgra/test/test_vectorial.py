@@ -140,13 +140,13 @@ class TestCGRAVectorial(unittest.TestCase):
             Programa({"PE00": {0: ISA.parsear("VLD v0, a[5]")}}).enlazar(simbolos, ancho_vector=4)
 
     def test_4_filas_alternas_escalares_y_vectoriales(self):
-        """Con 'filas_pares' y 'filas_impares' en 'distribucion', las filas pares deben ser M/C y las impares D/V, sea cual sea el tamaño; mezclarlas con otras claves debe fallar."""
+        """Con 'filas_pares' y 'filas_impares' en 'distribucion', los bordes oeste/este deben ser M y el resto E en las filas pares y C en las impares, sea cual sea el tamaño; mezclarlas con otras claves debe fallar."""
         distribucion = {
-            "filas_pares": {"oeste": "M", "este": "M", "resto": "C"},
-            "filas_impares": {"oeste": "D", "este": "D", "resto": "V"},
+            "filas_pares": {"oeste": "M", "este": "M", "resto": "E"},
+            "filas_impares": {"oeste": "M", "este": "M", "resto": "C"},
         }
-        self.assertEqual(generar_malla(4, 4, distribucion), [list("MCCM"), list("DVVD"), list("MCCM"), list("DVVD")])
-        self.assertEqual(generar_malla(1, 3, distribucion), [list("MCM")])
+        self.assertEqual(generar_malla(4, 4, distribucion), [list("MEEM"), list("MCCM"), list("MEEM"), list("MCCM")])
+        self.assertEqual(generar_malla(1, 3, distribucion), [list("MEM")])
         with self.assertRaisesRegex(ValueError, "mezcla"):
             generar_malla(2, 4, {**distribucion, "resto": "C"})
 

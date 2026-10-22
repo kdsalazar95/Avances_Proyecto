@@ -18,7 +18,9 @@ and which must be reduced or serialized.
 2. Split every operation by the PE type that can run it (types from
    `src/cgra.json`, see skill 01):
    - `LD`/`ST` (memory accesses) run only on **memory PEs**;
-   - `ADD`/`SUB`/`MUL`/`DIV` (arithmetic) run only on **compute PEs**.
+   - `ADD`/`SUB`/`MUL`/`DIV` (scalar arithmetic) run only on **compute PEs**
+     of type `escalar` (`E`) or `computo` (`C`), and the vector arithmetic on
+     `vectorial` (`V`) or `computo` (`C`).
 
    So every operand goes memory PE -> `SEND`/`RECV` -> compute PE, and every
    value to store goes back compute PE -> `SEND`/`RECV` -> memory PE.
@@ -38,7 +40,7 @@ and which must be reduced or serialized.
    contiguous elements** for the vector compute PEs, and keep the scalar work
    units above for the scalar compute PEs. Both run at the same time, each on
    its own rows, and the work is split between them by cost so that they end
-   together (skill 06): the scalar rows do the elements that do not fill a
+   together (skill 06): the `escalar` rows do the elements that do not fill a
    block, and also whole blocks when that makes the run shorter. A `VLD`/`VST` only reads or writes
    contiguous words, so every block must be contiguous in memory:
    - **map loop:** a block is `W` consecutive iterations (`c[i:i+W]`).

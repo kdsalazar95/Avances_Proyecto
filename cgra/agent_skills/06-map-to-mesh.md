@@ -15,8 +15,10 @@ of the manifest (`malla`).
 memory PEs:   PE(f, 0) and PE(f, columnas - 1)       for 0 <= f <= filas - 1
 compute PEs:  PE(f, c) with 1 <= c <= columnas - 2   (the compute block)
 
-M = memoria: LD, ST, SEND, RECV, MOV, NOP               (moves data, never computes)
-C = computo: ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP   (never touches memory)
+M = memoria:   LD, ST, VLD, VST, SEND, RECV, VSEND, VRECV, MOV, NOP  (moves data, never computes)
+E = escalar:   ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP              (scalar only, never touches memory)
+V = vectorial: VADD..VDIV, VREDSUM, VBCAST, SEND, RECV, VSEND, VRECV, MOV, NOP  (vector only)
+C = computo:   E + V                                                 (scalar and vector)
 ```
 
 `PE{fila}{columna}` is connected only to its north, south, east, and west
@@ -28,10 +30,17 @@ Each coordinate is written with the same width, and that width is however many
 digits the largest index needs:
 
 ```text
-up to 10 rows and columns (indices 0..9) -> one digit each:  PE00, PE12, PE99
-11 or more rows or columns (index 10+)    -> two digits each: PE0100 is row 1, column 0
-                                                              PE1000 is row 10, column 0
+largest index 0..9       -> one digit per coordinate
+largest index 10..99     -> two digits per coordinate
+largest index 100..999   -> three digits per coordinate
+largest index 1000..9999 -> four digits per coordinate
+and so on, without a fixed digit limit.
 ```
+
+Use the simulator's rule: `width = len(str(max(filas, columnas) - 1))`,
+then `f"PE{fila:0{width}d}{columna:0{width}d}"`. For a `120x3023` mesh,
+the width is 4 and `(119, 3022)` is `PE01193022`. Prefer `Malla.id_de()`
+when generating identifiers in code so filenames agree with the simulator.
 
 Never write `PE10` in a mesh of 11 or more, where it would be ambiguous. A
 `10x10` mesh still uses one digit (`PE00` .. `PE99`).
@@ -182,10 +191,12 @@ on every tile.
 ## Vectorial Mode
 
 In `vectorial` mode (manifest, skill 01) the servers and the reduction route do
-not change; only the work units do. `W` is `ancho_vector`. Rows are of one kind,
-so a vector compute PE (`V`) is always served by a vector memory PE (`D`) of its
-row, and a scalar one (`C`) by a scalar one (`M`). Number each class apart, in
-row-major order:
+not change; only the work units do. `W` is `ancho_vector`. The memory PEs (`M`)
+serve both scalars and vectors, so every compute PE is served by the `M` of its
+row as before. A vector compute PE (`V` or `C`) does the blocks of `W` elements
+(a `C` may also use scalar instructions, e.g. to accumulate `VREDSUM` results)
+and a scalar one (`E`) the scalar units. Number each class apart, in row-major
+order:
 
 ```text
 vector compute PEs:  q = 0 .. P_v - 1      (vector_compute_pes)
@@ -227,8 +238,20 @@ scalar:  the elements i = n*W .. N-1;  the t-th of them (t = i - n*W)
          -> scalar compute PE r = t mod P_s, as a scalar iteration
 ```
 
-Then every compute PE, vector or scalar, joins the reduction route above with
-its `acc` (the route uses scalar instructions, which both kinds have).
+Then every compute PE joins the reduction route above with its partial sum.
+`E` and `C` keep it in `acc`. A `V` has no scalar `ADD`, so it keeps it as a
+vector in `v4` and takes part in the route like this:
+
+```text
+row hops in a V row:   VSEND west, v4 / VRECV east, v5, then VADD v4, v4, v5;
+                       after the row hops, PE(f, 1) emits VREDSUM acc, v4
+column hop into a V:   the V does not add: it receives into rT and, on its own
+                       hop north, sends rT first and then acc; the E or C above
+                       adds both (one hop each)
+```
+
+The route ends in an `E` or `C` (`PE(0, 1)` is `E` in the default map), and two
+`V` rows are never stacked in column 1 (the rotation `E, V, C` guarantees it).
 
 ### Matmul and Convolucion
 
