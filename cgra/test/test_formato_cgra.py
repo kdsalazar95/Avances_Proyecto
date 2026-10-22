@@ -10,7 +10,9 @@ _raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
 
 from cgra import CGRA
-from formato_cgra import FormatoCGRA, validar_tipos
+from formato_cgra import FormatoCGRA, generar_malla, validar_tipos
+from isa import ISA
+from malla import Malla
 from programa import Programa
 
 
@@ -118,6 +120,37 @@ class TestFormatoCGRA(unittest.TestCase):
 
         ruta = self.escribir_json(filas=2, columnas=2, tipos_pe=TIPOS, distribucion=distribucion, malla=["M C", "C M"])
         self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M C", "C M"])
+
+    def test_10_ciclo_de_filas_escalar_vectorial_computo(self):
+        """Con 'ciclo_filas' las filas deben repetir las reglas en orden (E, V, C, E...) con M en oeste y este, sea cual sea el tamaño; una lista vacía o mezclarla con otras claves debe fallar."""
+        ciclo = {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": letra} for letra in "EVC"]}
+        self.assertEqual(generar_malla(6, 4, ciclo), [list(fila) for fila in ("MEEM", "MVVM", "MCCM") * 2])
+        self.assertEqual(generar_malla(2, 3, ciclo), [list("MEM"), list("MVM")])
+        with self.assertRaisesRegex(ValueError, "al menos una regla"):
+            generar_malla(2, 3, {"ciclo_filas": []})
+        with self.assertRaisesRegex(ValueError, "mezcla"):
+            generar_malla(2, 3, {**ciclo, "resto": "C"})
+
+    def test_11_cada_tipo_de_src_cgra_json_ejecuta_solo_lo_suyo(self):
+        """En src/cgra.json, M solo debe acceder a memoria, E solo hacer aritmética escalar, V solo vectorial y C ambas; lo demás debe rechazarse."""
+        formato = FormatoCGRA.cargar()
+        letras = {}
+        for pe in Malla(formato.filas, formato.columnas).ids():
+            letras.setdefault(formato.letra(pe), pe)
+        casos = {
+            "M": (["LD rA, a[0]", "VLD v0, a[0]"], ["ADD rA, rA, rB", "VADD v0, v0, v1"]),
+            "E": (["ADD rA, rA, rB"], ["VADD v0, v0, v1", "VSEND east, v0", "LD rA, a[0]"]),
+            "V": (["VADD v0, v0, v1", "VREDSUM rC, v2", "SEND west, rC"], ["ADD rA, rA, rB", "LD rA, a[0]"]),
+            "C": (["ADD rA, rA, rB", "VADD v0, v0, v1", "VREDSUM rC, v2"], ["VLD v0, a[0]"]),
+        }
+        self.assertEqual(set(letras), set(casos))
+        for letra, (aceptadas, rechazadas) in casos.items():
+            pe = letras[letra]
+            for instruccion in aceptadas:
+                validar_tipos(Programa({pe: {0: ISA.parsear(instruccion)}}), formato)
+            for instruccion in rechazadas:
+                with self.assertRaisesRegex(ValueError, "no está permitido"):
+                    validar_tipos(Programa({pe: {0: ISA.parsear(instruccion)}}), formato)
 
 if __name__ == "__main__":
     unittest.main()

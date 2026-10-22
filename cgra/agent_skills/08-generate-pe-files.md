@@ -4,6 +4,11 @@
 
 Write one text file per PE containing its instruction stream.
 
+Apply the [Mesh Compatibility Contract](mesh-compatibility.md). Small meshes
+also get exactly filas * columnas files: 1x1 gets only PE00.txt, 1x2 gets
+PE00.txt/PE01.txt, and 2x1 gets PE00.txt/PE10.txt. Do not invent extra border
+PEs. Use the actual simulator map and permissions for every header.
+
 ## Output Directory
 
 Inside the folder of the program:
@@ -52,20 +57,32 @@ instructions that file may contain.
 ## Actions
 
 1. Create `programas/<operacion>/pe_instructions/` if needed.
-2. Write cycle-numbered instructions for each PE.
+2. Generate the complete instruction streams from the current manifest, then
+   write cycle-numbered instructions for every PE, overwriting existing files
+   in full (truncate; never append). Their existence or an old header is not a
+   reason to skip generation. Remove only obsolete generated `PE*.txt` files
+   from this operation's `pe_instructions/` whose names are outside the current
+   mesh's expected set. This also covers a smaller mesh or a change in the
+   coordinate padding width. Leave other files and operations alone.
 3. Keep cycle numbers aligned across all files.
 4. Include `NOP` instructions for idle cycles so every file has the same cycle
    range.
 5. Write in each file only instructions of the PE's type (`src/cgra.json`):
-   `LD`/`ST` (and `VLD`/`VST`) only in memory PEs (`M`), `ADD`/`SUB`/`MUL`/`DIV`
-   only in `escalar` and `computo` PEs (`E`, `C`), and `VADD`/... only in
-   `vectorial` and `computo` PEs (`V`, `C`), in `vectorial` mode.
+   LD/ST and VLD/VST need memory capability (`M/G`); scalar arithmetic needs
+   eligible `E/C/G`, and vector arithmetic needs eligible `V/C/G` plus vector
+   hardware and vector mode. G can mix memory and compute instructions, one
+   per cycle. Never emit SEND/RECV to itself for local execution.
 6. Use in `LD`/`ST` (and `VLD`/`VST`) only the bank names of the regions in `memoria.bin`
    (skill 02), with indices inside each region (`filas * columnas` words); a
    `VLD`/`VST` at index `i` uses `i .. i + W - 1`, so all of them must be
    inside. The
    CGRA loads that memory as is and does not know the operation, so a bank that
    does not exist there fails at run time.
+7. Keep explicit tile/phase and route records with the operation's generated
+   manifest. Scalar and vector work sharing a C/G is ordered rather than
+   duplicated in a cycle. Idle tile entries emit NOP unless the recorded plan
+   gives that PE relay, shared-server or reduction work. An unavailable
+   layout/route is an error, not a reason to publish an incomplete PE set.
 
 ## Outputs
 

@@ -3,13 +3,34 @@
 ## Purpose
 
 Assign the work units and the communication between PEs to a `filas x columnas`
-mesh whose PEs have **types** (see [Receive Inputs](01-receive-inputs.md)). The
-west and east columns are always **memory PEs** and the rest are **compute
-PEs**; only the size changes, and it comes from the manifest (`src/cgra.json`).
-Every rule below is written for any `filas` and `columnas`; apply it to the map
-of the manifest (`malla`).
+mesh whose PEs have **types** (see [Receive Inputs](01-receive-inputs.md)). Apply
+the [Mesh Compatibility Contract](mesh-compatibility.md) first. The geometric
+formulas below specialize the standard border layout; they must not be used
+for one/two-column or arbitrary explicit layouts. Always use the actual map.
 
-## Mesh
+## Local, Narrow and Explicit Layouts
+
+Use `topologia`, eligible PE lists, servers, routes and `output_pe` from the
+manifest. For local G, set its server to itself and use no transfer. For Nx1,
+memory is at row 0, compute starts at row 1, and transfers go north/south.
+For Nx2, each row's west M serves its east C. With one or two rows and at
+least 3 columns, keep M at both ends and use only C in the interior. With
+3 columns (1x3 or 2x3), use both servers for each row's C. Wider special
+rows use the nearest border server and compatible relays through C, as in
+the existing shared-server rules. For other explicit maps, find compatible paths as specified by the
+contract; do not invent a border memory PE or arithmetic at a memory-only PE.
+
+For at least 3 rows and 3 columns, retain the original normal-mesh mapping
+and E/V/C row rotation. Special C-only compute rows use separate scalar and
+vector phases or a reserved subset of C for scalar work; do not assume an E
+row exists or schedule two instructions on a C in the same cycle.
+
+Use eligible-list tiling for these cases, including a single worker. Record
+every unit, owner, phase and round. With one worker, input/output transfers and
+computation repeat until the full problem is covered. A singleton G needs
+neither a compute-to-compute reduction nor an output transfer.
+
+## Standard Border Mesh
 
 ```text
 memory PEs:   PE(f, 0) and PE(f, columnas - 1)       for 0 <= f <= filas - 1
@@ -19,6 +40,7 @@ M = memoria:   LD, ST, VLD, VST, SEND, RECV, VSEND, VRECV, MOV, NOP  (moves data
 E = escalar:   ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP              (scalar only, never touches memory)
 V = vectorial: VADD..VDIV, VREDSUM, VBCAST, SEND, RECV, VSEND, VRECV, MOV, NOP  (vector only)
 C = computo:   E + V                                                 (scalar and vector)
+G = generico:  memory + scalar compute, and vector instructions when configured
 ```
 
 `PE{fila}{columna}` is connected only to its north, south, east, and west
@@ -30,23 +52,30 @@ Each coordinate is written with the same width, and that width is however many
 digits the largest index needs:
 
 ```text
-up to 10 rows and columns (indices 0..9) -> one digit each:  PE00, PE12, PE99
-11 or more rows or columns (index 10+)    -> two digits each: PE0100 is row 1, column 0
-                                                              PE1000 is row 10, column 0
+largest index 0..9       -> one digit per coordinate
+largest index 10..99     -> two digits per coordinate
+largest index 100..999   -> three digits per coordinate
+largest index 1000..9999 -> four digits per coordinate
+and so on, without a fixed digit limit.
 ```
+
+Use the simulator's rule: `width = len(str(max(filas, columnas) - 1))`,
+then `f"PE{fila:0{width}d}{columna:0{width}d}"`. For a `120x3023` mesh,
+the width is 4 and `(119, 3022)` is `PE01193022`. Prefer `Malla.id_de()`
+when generating identifiers in code so filenames agree with the simulator.
 
 Never write `PE10` in a mesh of 11 or more, where it would be ambiguous. A
 `10x10` mesh still uses one digit (`PE00` .. `PE99`).
 
 ## The Two Rules of the Types
 
-1. **All arithmetic runs on compute PEs.** A memory PE never emits `ADD`,
-   `SUB`, `MUL` or `DIV`.
-2. **All memory accesses run on memory PEs.** A compute PE never emits `LD` or
-   `ST`. Every value a compute PE uses arrives with `RECV`, and every value it
-   produces for memory leaves with `SEND`.
+1. **All arithmetic requires compute capability.** A memory-only M never
+   emits ADD/SUB/MUL/DIV. A G can perform arithmetic as well as access memory.
+2. **All memory accesses require memory capability.** E/V/C never emit `LD/ST`.
+   A G may load, compute and store locally. With separate roles, operands and
+   results use compatible send/receive routes.
 
-## Server of Each Compute PE
+## Server of Each Compute PE in the Border Layout
 
 Each compute PE is served by the **nearest memory PE in its own row** (on a tie,
 the west one). The server loads the operands of that compute PE, sends them to
@@ -89,7 +118,7 @@ vector steps; the second is `b`, the image pixel or the vector factor. The
 reduction route does not change: its last hop still goes to `PE(0, 0)`, which
 stores `result[0]`. Skill 07 has the tables for this case.
 
-## Reduccion: Assignment
+## Reduccion: Scalar Border Assignment
 
 Number the compute PEs in row-major order (`P_c = filas * (columnas - 2)` of
 them). Iteration `i` goes to compute PE number `p = i mod P_c`:
@@ -99,13 +128,15 @@ fila    = p // (columnas - 2)
 columna = 1 + p mod (columnas - 2)
 ```
 
-Use this single rule; do not switch to contiguous chunks. For iteration `i`,
+Use this interleaving rule for this specialization. Every selected PE must
+support scalar arithmetic; V cannot own a scalar unit. Other layouts use
+`eligible_compute_pes[i mod count]`. For iteration `i`,
 the server of that compute PE loads `a[i]` and `b[i]`, the compute PE adds them
 and accumulates the sum in `acc`, and the server stores `c[i]`. When `N` is
 larger than `P_c`, each compute PE gets `ceil(N / P_c)` or `floor(N / P_c)`
 iterations of that interleaved sequence.
 
-## Reduccion: Reduction Route
+## Reduccion: Border Reduction Route
 
 Only compute PEs hold partial sums, so the route runs over the compute block
 and ends in a memory PE:
@@ -127,10 +158,15 @@ column hops:  PE(f, 1) -> PE(f - 1, 1)   for f = filas - 1 down to 1
 store:        PE(0, 1) -> PE(0, 0), and PE(0, 0) stores result[0]
 ```
 
-The route has `(columnas - 3) + (filas - 1) + 1` hops in sequence, whatever the
-size.
+The scalar border route has `(columnas - 3) + (filas - 1) + 1` hops in
+sequence. Vector-only rows need the adjustments below. Other layouts use the
+recorded reduction plan and output PE; PE00 is preferred, not mandatory.
 
-## Matmul and Convolucion: Output Tiles
+## Matmul and Convolucion: Scalar Border Output Tiles
+
+This rectangular formula applies when all listed compute positions are scalar
+eligible. With V rows, use the vector/scalar work lists below. For narrow or
+irregular maps, use the ordered eligible lists from the compatibility contract.
 
 One compute PE per output element, with the **compute block** sliding over the
 output in tiles of `tile_filas x tile_columnas` (the compute block of the
@@ -187,8 +223,10 @@ In `vectorial` mode (manifest, skill 01) the servers and the reduction route do
 not change; only the work units do. `W` is `ancho_vector`. The memory PEs (`M`)
 serve both scalars and vectors, so every compute PE is served by the `M` of its
 row as before. A vector compute PE (`V` or `C`) does the blocks of `W` elements
-(a `C` may also use scalar instructions, e.g. to accumulate `VREDSUM` results)
-and a scalar one (`E`) the scalar units. Number each class apart, in row-major
+(a C/G may also use scalar instructions, e.g. to accumulate VREDSUM results)
+and a scalar-assigned PE handles scalar units. The border examples use E for
+that group; the compatibility contract covers C/G phases. Number each assigned
+class apart, in row-major
 order:
 
 ```text
@@ -196,8 +234,9 @@ vector compute PEs:  q = 0 .. P_v - 1      (vector_compute_pes)
 scalar compute PEs:  r = 0 .. P_s - 1      (scalar_compute_pes)
 ```
 
-The vector PEs and the scalar PEs work **at the same time**: they are on
-different rows, so they never share a link. Split the work so that both groups
+In the standard row-homogeneous layout, disjoint vector and scalar groups may
+work **at the same time** on separate rows. Other maps need explicit link/server
+reservations, and shared C/G need separate phases. Split the work so both groups
 end together: a vector PE is faster, but leaving the scalar rows idle wastes
 them. The cost of one unit comes from the tables of skill 07:
 
@@ -218,8 +257,13 @@ n      = the value from 0 to the number of whole units that gives the lowest
          max(T_v(n), T_s(n)); on a tie, the largest n
 ```
 
-Try every `n`: there are few. If there are no scalar compute PEs, `n` is every
-whole unit and the vector PEs also do the tail, after their blocks.
+Try every `n` for this adjacent, disjoint-resource specialization. If P_v is
+zero, run scalar work. If the scalar-only set is empty, use reachable C/G for
+the tail in a later phase or reserve them before splitting. A V cannot do the
+scalar tail. If no such route/capability exists, report the unsupported tail.
+Do not evaluate these formulas with a zero denominator. For shared/distant
+servers, include actual delivery and return costs; these table costs alone do
+not establish an optimal partition.
 
 ### Reduccion
 
@@ -231,8 +275,22 @@ scalar:  the elements i = n*W .. N-1;  the t-th of them (t = i - n*W)
          -> scalar compute PE r = t mod P_s, as a scalar iteration
 ```
 
-Then every compute PE, vector or scalar, joins the reduction route above with
-its `acc` (the route uses scalar instructions, which both kinds have).
+Then every compute PE joins the reduction route above with its partial sum.
+`E` and `C` keep it in `acc`. A `V` has no scalar `ADD`, so it keeps it as a
+vector in `v4` and takes part in the route like this:
+
+```text
+row hops in a V row:   VSEND west, v4 / VRECV east, v5, then VADD v4, v4, v5;
+                       after the row hops, PE(f, 1) emits VREDSUM acc, v4
+column hop into a V:   the V does not add: it receives into rT and, on its own
+                       hop north, sends rT first and then acc; the E or C above
+                       adds both (one hop each)
+```
+
+This particular scalar-forwarding route ends in E/C and assumes no consecutive
+V rows, as in the standard rotation E,V,C. Arbitrary explicit maps must use
+the contract's scalar or vector reduction plan, including consecutive V nodes,
+rather than applying this specialization without checking capabilities.
 
 ### Matmul and Convolucion
 
@@ -283,15 +341,18 @@ scalar tiles = ceil((salida_filas * salida_columnas - n * W) / P_s)    (scalar P
 
 ## Sizes That Do Not Match the Mesh
 
-- **Output larger than the compute block:** that is the tiling above. The number
-  of tiles is `ceil(salida_filas / tile_filas) * ceil(salida_columnas / tile_columnas)`.
+- **Output larger than the compute block:** use multiple rounds. Only the
+  rectangular scalar border tile uses
+  `ceil(salida_filas / tile_filas) * ceil(salida_columnas / tile_columnas)`;
+  vector and eligible-list modes use their actual work-unit/worker counts.
 - **Edge tiles:** when the output is not a multiple of the block, the compute
   PEs whose `global_fila` or `global_columna` falls outside the output have
-  nothing to do in that tile and emit `NOP`, and so does their server. Every
-  output element must still be assigned exactly once.
+  nothing to calculate in that tile and emit NOP except when explicitly
+  relaying. Their shared server may serve another active PE; do not idle it
+  merely because one client has no work. Every output is assigned once.
 - **Mesh larger than the problem:** the extra compute PEs stay in `NOP`. In a
-  reduction they still execute `MOV acc, 0.0` at the start, so they contribute
-  a neutral value and the reduction route above stays the same.
+  reduction, initialize a neutral scalar/vector partial if the PE joins the
+  reduction route. Otherwise leave it idle or use it only as a relay.
 
 ## Outputs
 

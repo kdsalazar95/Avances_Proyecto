@@ -106,24 +106,27 @@ class SimuladorCGRA:
             raise SystemExit(f"No se pudo cargar el programa: {error}")
         inicial, formas = cgra.memoria.regiones()
 
-        Consola.titulo(f"CGRA {cgra.filas}x{cgra.columnas}: ejecutando {len(programa_cargado.ciclos())} ciclos")
-        print(f"  Formato:  {self.ruta_formato}")
-        for linea in cgra.formato.mapa() + cgra.formato.leyenda():
-            print(f"            {linea}")
-        print(f"  Programa: {carpeta}")
-        print(f"  Memoria:  {ruta_memoria} ({len(formas)} regiones) cargada en una memoria de {len(cgra.memoria)} palabras")
+        if not mostrar_ciclos:
+            Consola.titulo(f"CGRA {cgra.filas}x{cgra.columnas}: ejecutando {len(programa_cargado.ciclos())} ciclos")
+            print(f"  Formato:  {self.ruta_formato}")
+            for linea in cgra.formato.mapa() + cgra.formato.leyenda():
+                print(f"            {linea}")
+            print(f"  Programa: {carpeta}")
+            print(f"  Memoria:  {ruta_memoria} ({len(formas)} regiones) cargada en una memoria de {len(cgra.memoria)} palabras")
 
         # 3. Ejecutar.
         traza = Traza() if mostrar_traza else None
         cgra.ejecutar(programa_cargado, traza)
-        if traza is not None:
+        if traza is not None and not mostrar_ciclos:
             traza.mostrar()
         final, _ = cgra.memoria.regiones()
-        Resultados(inicial, final, formas).mostrar()
+        if not mostrar_ciclos:
+            Resultados(inicial, final, formas).mostrar()
 
         # 4. Reportar. El reporte de ciclos se guarda en todas las corridas,
         #    en la carpeta del programa, y se reescribe en la siguiente.
-        reporte = ReporteCiclos(programa_cargado, cgra.malla, str(carpeta), formas, cgra.formato)
+        reporte = ReporteCiclos(programa_cargado, cgra.malla, str(carpeta), formas,
+                               cgra.formato, inicial=inicial, final=final, traza=traza)
         if mostrar_ciclos:
             reporte.mostrar()
         ruta_reporte = Path(ruta_reporte) if ruta_reporte else carpeta / "reporte_ciclos.txt"

@@ -25,6 +25,29 @@ in `NOP`. The size is not fixed: every skill builds the CGRA from
 
 ## Pipeline
 
+Apply the [Mesh Compatibility Contract](mesh-compatibility.md) throughout the
+pipeline. It defines automatic small layouts (singleton G, vertical M/C,
+two-column M C, and one/two-row meshes with M at both ends and C interiors),
+capability checks, compatible routes, scalar remainders
+and tiling. These are the requirements for the upcoming shared map resolver
+and scheduling implementation. This documentation update does not implement
+that support: use the actual simulator map, and report an implementation
+limitation if it cannot represent or schedule a requested layout. An existing
+explicit map or concrete distribution must never be silently changed.
+
+The exceptions apply in that order. Thus 2x3 is two M C M rows; 1x4 and
+2x4 use M C C M rows. Normal meshes with at least 3 rows and 3 columns keep
+the original E/V/C row rotation and scheduling instructions.
+
+Existing files in `programas/<operacion>/` are generated outputs, not inputs
+that prevent compilation. On every invocation, rebuild the IR, graphs, initial
+memory and all PE instruction files from the current C source and
+`src/cgra.json`. Overwrite existing PE files and remove obsolete generated
+`PE*.txt` files as described in skill 08. Changing the mesh, PE types, vector
+width or memory capacity requires recompilation and validation; do not stop
+because the old program targets different hardware. `run_cgra.py` loads and
+executes these outputs; it does not run this compilation pipeline automatically.
+
 The pipeline always compiles **all the operations** of the `OPERACIONES` table,
 never only one. Skill 01 reads the CGRA once and builds the list of operations;
 then skills 02 to 09 run once per operation, one after the other, each in its
@@ -56,27 +79,32 @@ opt-18 -passes=dot-ddg -disable-output operaciones.ll
 ## PE Types (`src/cgra.json`)
 
 One `PE{fila}{columna}` per position, connected only to its north, south, east,
-and west neighbors. The west and east columns are only **memory PEs** (`M`)
-and the rest are **compute PEs**, whatever the size. There are four types:
+and west neighbors. In the standard border layout the west and east columns
+are **memory PEs** (`M`) and the interior PEs compute. Small and explicit
+layouts follow the compatibility contract. The specialized types are:
 
 ```text
 M = memoria    the west and east columns; loads/stores scalars and vectors, never computes
 E = escalar    scalar arithmetic only
 V = vectorial  vector arithmetic only
 C = computo    scalar and vector arithmetic (E + V)
+G = generico   memory and scalar compute; vector ISA when configured
 ```
 
-The `distribucion` of `src/cgra.json` alternates the compute rows: even rows
-(from row 0) are scalar and odd rows are computo. `V` is available for an
-explicit `malla`:
+The `distribucion` of `src/cgra.json` (`ciclo_filas`) rotates the compute rows
+escalar, vectorial, computo: row `f` is `E`, `V` or `C` for `f mod 3` = 0, 1, 2:
 
 ```text
 memory PEs:   PE(f, 0) and PE(f, columnas - 1), for every row f
 compute PEs:  PE(f, c) with 1 <= c <= columnas - 2
 
-even rows:    M E E ... E M
-odd rows:     M C C ... C M
+f mod 3 = 0:  M E E ... E M
+f mod 3 = 1:  M V V ... V M
+f mod 3 = 2:  M C C ... C M
 ```
+
+This picture describes the existing border distribution, not the narrow-mesh
+exceptions. A generic PE can fulfill both memory and compute roles locally.
 
 ## Instruction Set per PE Type
 
@@ -93,6 +121,10 @@ SEND dir, reg               x            x            x              x
 RECV dir, reg               x            x            x              x
 NOP                         x            x            x              x
 ```
+
+G combines the memory and compute instruction permissions actually configured
+for it. With no vector width it uses only the scalar ISA. Never infer G's
+permissions just from the letter; read its declared or implicit generic type.
 
 When `src/cgra.json` has `ancho_vector` (`W`) and vector compute PEs (`V` or
 `C`), the pipeline runs in `vectorial` mode (skill 01): the vector compute PEs
@@ -111,6 +143,6 @@ VSEND dir, vreg             x            x             x     the whole vector, 1
 VRECV dir, vreg             x            x             x
 ```
 
-Memory PEs load operands and send them to the compute PEs; compute PEs compute
-and send their results back to be stored (skills 05-07). `run_cgra.py` refuses
+Memory-capable PEs load operands and send them to the compute PEs when separate;
+a `G` can load, compute and store locally (skills 05-07). `run_cgra.py` refuses
 to load a program with an instruction outside the type of its PE.

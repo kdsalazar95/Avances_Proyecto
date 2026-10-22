@@ -7,6 +7,10 @@ and which must be reduced or serialized.
 
 ## Actions
 
+Apply the [Mesh Compatibility Contract](mesh-compatibility.md). Determine
+feasibility per operation and per work unit before distributing work. A large
+mesh can still lack the required memory, arithmetic or routes.
+
 1. Classify every computation loop nest as one of:
    - **map loop:** independent elementwise iterations, such as
      `c[i] = a[i] + b[i]` in `reduccion`.
@@ -17,36 +21,40 @@ and which must be reduced or serialized.
      and `convolucion` (`result[i][j]` accumulates over the kernel window).
 2. Split every operation by the PE type that can run it (types from
    `src/cgra.json`, see skill 01):
-   - `LD`/`ST` (memory accesses) run only on **memory PEs**;
+   - `LD`/`ST` (memory accesses) run only on memory-capable PEs (`M/G`);
    - `ADD`/`SUB`/`MUL`/`DIV` (scalar arithmetic) run only on **compute PEs**
-     of type `escalar` (`E`) or `computo` (`C`), and the vector arithmetic on
-     `vectorial` (`V`) or `computo` (`C`).
+     of type `escalar` (`E`), `computo` (`C`) or generic (`G`), and vector
+     arithmetic on `V/C/G` when their instruction lists allow it.
 
-   So every operand goes memory PE -> `SEND`/`RECV` -> compute PE, and every
-   value to store goes back compute PE -> `SEND`/`RECV` -> memory PE.
+   Separate memory and compute PEs use compatible transfers in both directions.
+   On a G that serves itself, load, compute and store locally in separate
+   cycles, with no self-transfer.
 3. Distribute the arithmetic over the compute PEs of the manifest. If the work
    does not fit, do not ask for more PEs: hand it to skill 06, which splits it
-   into tiles of the compute block.
+   into tile rounds over the eligible compute list. One compute PE is enough
+   for sequential scalar work if its memory routes and arithmetic are valid.
 4. For a **reduction loop**, use local partial sums per compute PE followed by
-   a single reduction across the compute PEs. The final sum is sent to a memory
-   PE, which stores it.
+   a reduction over the contributing PEs with compatible combining nodes. A V
+   keeps vector partials until `VREDSUM`; do not assign it scalar `ADD`.
+   With one contributor no inter-compute reduction is necessary. Store the
+   final sum at the selected memory-capable output PE, locally on G if possible.
 5. For a **map with a nested reduction**, every compute PE owns one output
-   element at a time and accumulates it in `acc`. Its memory PE loads the
-   operands and delivers them; at the end the compute PE sends `acc` back and
-   the memory PE stores it.
+   element or vector segment at a time and accumulates it in acc or v3.
+   A separate server delivers operands and stores the returned result;
+   a memory-capable G may perform those accesses locally.
 6. If bit-identical sequential floating-point behaviour is required, serialize
    the reduction in original index order instead of reducing across the mesh.
 7. In `vectorial` mode (manifest, skill 01), group the work in **blocks of `W`
    contiguous elements** for the vector compute PEs, and keep the scalar work
-   units above for the scalar compute PEs. Both run at the same time, each on
-   its own rows, and the work is split between them by cost so that they end
-   together (skill 06): the `escalar` rows do the elements that do not fill a
+   units above for the scalar compute PEs. They may run concurrently on disjoint
+   PEs and routes; a shared C/G executes separate phases. Split work by scheduled
+   cost (skill 06): eligible scalar PEs do the elements that do not fill a
    block, and also whole blocks when that makes the run shorter. A `VLD`/`VST` only reads or writes
    contiguous words, so every block must be contiguous in memory:
    - **map loop:** a block is `W` consecutive iterations (`c[i:i+W]`).
-   - **reduction loop:** each block is reduced inside the compute PE with
-     `VREDSUM` and added to `acc`; the reduction across the compute PEs does
-     not change.
+   - **reduction loop:** C/G may use `VREDSUM` and scalar `ADD acc`; V instead
+     accumulates blocks with `VADD` and reduces lanes later. Select a final
+     reduction route compatible with that partial-sum representation.
    - **map with a nested reduction:** a block is `W` consecutive output
      elements of the **same row**, accumulated as a vector. In matmul,
      `result[i][j:j+W] += a[i][k] * b[k][j:j+W]`; in convolucion,
@@ -56,6 +64,11 @@ and which must be reduced or serialized.
      (`b[k:k+W][j]` is not contiguous).
 
 ## Outputs
+
+Check scalar tails explicitly. If no E is eligible, schedule them on C/G in
+separate phases or reserve C/G for scalar work. If no scalar execution path
+exists, reject unsupported partial vectors; do not pad or cross a row boundary.
+Use scalar execution for the whole operation when it is the valid fallback.
 
 Return work units. For `reduccion`:
 
@@ -79,7 +92,8 @@ parallel_work:
   block j (elements jW .. jW+W-1):
     memory PE:  VLD a, VLD b, send both              (VLD, VSEND)
     compute PE: receive both, add lane by lane       (VRECV, VADD)
-    compute PE: send c back, reduce it into acc      (VSEND, VREDSUM, ADD)
+    compute PE: send c back                         (VSEND)
+    C/G: VREDSUM + ADD into acc; V: VADD into v4, VREDSUM later
     memory PE:  receive and store the block of c     (VRECV, VST)
 tail_work:
   the elements after the last full block, as the scalar iterations above

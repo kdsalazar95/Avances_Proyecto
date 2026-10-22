@@ -4,6 +4,11 @@
 
 Convert mapped PE work into cycle-by-cycle instructions.
 
+Apply the [Mesh Compatibility Contract](mesh-compatibility.md). Select local,
+vertical, paired, border or explicit-path schedules from the manifest; the
+adjacent horizontal tables below are specialized templates, not constraints
+on all valid mesh sizes. Verify that the shared loader supports the actual map.
+
 ## Instruction Set
 
 ```text
@@ -41,6 +46,7 @@ memoria (M):   NOP, MOV, LD, ST, SEND, RECV, VLD, VST, VSEND, VRECV
 escalar (E):   NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV
 vectorial (V): NOP, MOV, SEND, RECV, VADD, VSUB, VMUL, VDIV, VREDSUM, VBCAST, VSEND, VRECV
 computo (C):   E + V
+generico (G):  scalar memory + compute ISA, vector ISA when configured
 ```
 
 The vector instructions are only emitted in `vectorial` mode: take the exact
@@ -55,8 +61,8 @@ load the program and reports the PE and cycle.
 
 1. Emit exactly one instruction per PE per cycle.
 2. Insert `NOP` when a PE has no work during a cycle.
-3. Respect the PE types (above): `LD`/`ST` only on memory PEs, arithmetic only
-   on compute PEs.
+3. Respect the actual instruction lists: LD/ST on memory-capable M/G,
+   arithmetic on eligible E/V/C/G. A G may fulfill both roles in different cycles.
 4. Do not use a register before the instruction that defines it, and do not
    overwrite it before its last use.
 5. Align neighbor communication: a `SEND <dir>` and the neighbor's
@@ -66,6 +72,59 @@ load the program and reports the PE and cycle.
 6. Preserve operation dependencies from the DDG.
 7. For local accumulation, accumulate in the compute PE before starting the
    reduction across the mesh.
+
+## Local Execution: 1x1 G
+
+Use the same bank names and bounds as every other layout. A scalar reduction
+starts with `MOV acc, 0.0`, repeats the following per input element, then ends
+with `ST result[0], acc`:
+
+```text
+LD rA, a[i]
+LD rB, b[i]
+ADD rC, rA, rB
+ST c[i], rC
+ADD acc, acc, rC
+```
+
+For each matmul/convolution output, clear acc, repeat local `LD rA`, `LD rB`,
+`MUL rC, rA, rB`, `ADD acc, acc, rC` for all accumulation steps, then store
+acc in that output position. Reuse the singleton for the next output. There
+are no sends, receives or self-neighbors. Vector local execution is optional
+when the real G instruction list and width support it; scalar execution is a
+valid baseline and handles all remainders.
+
+## Narrow Meshes
+
+- **Nx2:** each row has M west and C east. Use the single-server adjacent
+  tables with `to C = east` and `to M = west`. Scalar/vector phases on the
+  same C must not overlap. Combine reduction partials up the east column and
+  send the total west to the selected memory PE.
+- **Nx1, N >= 2:** M at row 0 serves C below. For the nearest C, translate
+  the adjacent tables to `to C = south`, `to M = north`. More distant C use
+  explicit vertical relays; serialize shared-server and relay conflicts.
+  Reduce upward through C to row 1, then send north to memory at row 0.
+- **1x3 or 2x3:** every row is M C M. Use the two-server tables already below.
+  Each C handles full vector blocks and a separately scheduled scalar tail.
+  1x3 has no inter-compute reduction; 2x3 combines the two C partials up the
+  middle column before storing at the selected memory PE.
+- **One or two rows, more than 3 columns:** keep M at both ends, with every
+  interior PE C. Use the existing adjacent/shared-server rules and record
+  horizontal relays. Reduce each compute row toward its westmost C and, for
+  two rows, combine upward. Scalar and vector work on a shared C uses separate
+  phases, unless different C PEs have been reserved for concurrent work.
+- **At least 3 rows and 3 columns:** preserve the original normal-mesh
+  schedules and E/V/C row rotation; the exceptions above do not replace them.
+- **Other explicit maps:** use the recorded paths/root/output PE. Neither
+  orientation nor endpoint may be inferred solely from a border coordinate.
+
+Record phase and tile boundaries. Reset an output accumulator at each new
+output unit, not at every accumulation step. Reduction input blocks instead
+retain their local partial sum across rounds. Initialize idle contributors
+with the correct scalar/vector zero. Only useful relays, shared-server work
+and reduction work may replace NOP on a PE with no assigned output unit.
+
+## Adjacent Border Templates
 
 The tables below are for a compute PE **next to its server** that is the only
 compute PE of that server, as with two compute columns (skill 06). `<to C>` is
@@ -181,17 +240,36 @@ use the tables of [Two Servers](#two-servers) instead.
    - After the last block, two closing cycles: the server emits
      `VST c[last i], v2` and then `NOP`; the compute PE emits `VREDSUM rC, v2`
      and then `ADD acc, acc, rC`.
+   - A `V` compute PE (no scalar `ADD`) accumulates the blocks in `v4`
+     instead: at `t+0` it emits `VADD v4, v4, v2` (previous block) instead
+     of `VREDSUM`, and `NOP` at `t+2`. In the first block it clears `v4` with
+     `MOV rT, 0.0` at `t+0` and `VBCAST v4, rT` at `t+2`. Its two closing
+     cycles are `VADD v4, v4, v2` and `NOP`. A `V` with no blocks emits
+     `MOV rT, 0.0`, `VBCAST v4, rT`.
 2. Scalar elements (the ones left by the split of skill 06), on the scalar
    compute PEs, with the scalar 6-cycle step of
    [Reduccion Schedule](#reduccion-schedule) and its closing cycle, in the same
    cycles as the blocks of the vector rows.
-   - Only if there are no scalar compute PEs (`E`), the vector compute PEs do the
-     tail after their blocks: in the first tail step the compute PE emits
+   - If there are no eligible scalar-only PEs, the scalar-capable `C/G` do the
+     tail after their blocks (a `V` cannot: it has no scalar `ADD`): in the first tail step the compute PE emits
      `NOP` at `t+0` instead of `ADD` (there is no previous scalar element) and
      the server `NOP` at `t+4`.
-3. A compute PE with no blocks and no tail elements emits `MOV acc, 0.0` once.
+3. A participating compute PE with no work emits `MOV acc, 0.0`, or clears v4
+   with `MOV rT, 0.0` and `VBCAST v4, rT` if it is V. Other idle PEs need not
+   contribute to the reduction.
    Pairs pad with `NOP` so all of them reach the reduction route together; the
-   route and the store are the scalar ones.
+   route and the store are the scalar ones, except in `V` rows (skill 06):
+
+   ```text
+   row hop, V row:    t: VSEND west, v4   / VRECV east, v5
+                      t+1: NOP            / VADD v4, v4, v5
+   after row hops:    PE(f, 1) of a V row: VREDSUM acc, v4    (1 cycle)
+   column hop into V: t: SEND north, acc  / RECV south, rT     (V keeps it)
+   hops out of a V:   t: SEND north, rT   / RECV south, rT
+                      t+1: NOP            / ADD acc, acc, rT
+                      t+2: SEND north, acc/ RECV south, rT
+                      t+3: NOP            / ADD acc, acc, rT
+   ```
 
 ### Matmul and Convolucion
 
@@ -212,6 +290,7 @@ t+4   | NOP                         | VBCAST v0, rA
 
 - In the first step of a tile, the compute PE clears `v3`: `MOV rT, 0.0` at
   `t+0` and `VBCAST v3, rT` at `t+2`.
+- The table has no scalar arithmetic, so `V` and `C` run it the same way.
 - The factors are the ones of skill 06.
 
 After the last step, close the tile in 4 cycles:
@@ -271,6 +350,12 @@ First step: `MOV acc, 0.0` in `C` at `t+0`, `NOP` in `C` and in `E` at `t+3`.
 Two closing cycles: `E` emits `VST c[last i], v2` and `NOP`; `C` emits
 `VREDSUM rC, v2` and `ADD acc, acc, rC`.
 
+This two-server vector table uses scalar ADD and therefore directly applies
+to C/G. For a V, substitute vector partial accumulation as in the single-server
+V variant: initialize v4 with MOV/VBCAST, replace the previous-block VREDSUM
+with VADD into v4, omit scalar ADD, and close with VADD. Select a compatible
+vector reduction plan; never assume V can execute the scalar ADD in this table.
+
 ### Matmul and Convolucion, scalar: 4-cycle step
 
 ```text
@@ -306,17 +391,22 @@ First step of a tile: `MOV rT, 0.0` in `C` at `t+0` and `VBCAST v3, rT` at
 
 ## Shared or Distant Servers
 
-With more than two compute columns, a memory PE serves several compute PEs and
-some of them are at distance `d > 1` (skill 06). There is no fixed table for
-them; build the cycles from the rules above:
+A memory PE may serve several compute PEs in a wide row, a single-column
+mesh or an explicit map. Some are at distance d > 1 (skill 06). Build cycles
+from the manifest's paths; horizontal, vertical and turning paths use the
+same neighbor-hop rules. There is no fixed table for all of them:
 
 1. A delivery to a compute PE at distance `d` takes `d` cycles, one hop per
-   cycle along the row. Each compute PE in between receives the value into `rT`
+   cycle along the path. Each relay receives the value into `rT`
    in one cycle (`RECV <to M>, rT`) and sends it on in the next
    (`SEND <to C>, rT`). The last hop receives into the real register (`rA`,
    `rB`), and results travel back to the server the same way. A vector is
    relayed the same way through `v7` (`VRECV <to M>, v7`, then
    `VSEND <to C>, v7`).
+   Every relay must support both instructions of the transfer type. Keep
+   live scalar partial sums separate from rT and live vectors separate from
+   v7. A V reduction that forwards a scalar partial already using rT needs
+   a distinct available register or a different schedule.
 2. A relaying compute PE can only relay in a cycle where it is not using that
    link, and `rT` (or `v7`) must be free: each holds one value in transit at a
    time. In vectorial mode the first step of a tile also uses `rT` to clear
@@ -348,6 +438,8 @@ v0   first vector operand (a block of a; the scalar factor copied to every lane)
 v1   second vector operand (a block of b; the vector factor)
 v2   vector result (a block of c; the product of a step)
 v3   vector accumulation of an output segment
+v4   vector partial sum of a V PE (reduccion)
+v5   received vector partial sum (reduction route of a V row)
 v7   relayed vector (shared or distant servers)
 ```
 
