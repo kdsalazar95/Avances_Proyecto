@@ -133,6 +133,24 @@ class TestEstadisticasCiclos(ConReduccion2x2):
         self.assertIn("PE00 (-): MOV x1, LD x9, ST x4, ADD x8, RECV x2", texto)
         self.assertIn("PE01 (-): MOV x1, LD x9, ST x3, ADD x6, SEND x1", texto)
 
+    def test_8_guarda_todos_los_ciclos_incluso_sin_comunicacion(self):
+        """El archivo debe incluir cada ciclo y PE, aunque todo el ciclo sea NOP y no haya ningún envío."""
+        programa = self.sin_comunicacion()
+        for pe_id in self.malla.ids():
+            programa[pe_id][0] = ISA.parsear("NOP")
+        ruta = os.path.join(self.directorio.name, "reporte_completo.txt")
+        ReporteCiclos(programa, self.malla).guardar(ruta)
+        with open(ruta, encoding="utf-8") as archivo:
+            contenido = archivo.read()
+        detalle = contenido.split("Detalle de todos los ciclos", 1)[1].split("7. MEMORIA FINAL", 1)[0]
+        self.assertEqual(detalle.count("  Ciclo "), 24)
+        for pe_id in self.malla.ids():
+            self.assertEqual(detalle.count(f"{pe_id} (-):"), 24)
+        primero = detalle.split("  Ciclo 0:\n", 1)[1].split("  Ciclo 1:\n", 1)[0]
+        for pe_id in self.malla.ids():
+            self.assertIn(f"{pe_id} (-): NOP", primero)
+        self.assertIn("  Ciclo 23:\n", detalle)
+
     def test_7_muestra_que_pe_accede_a_que_posiciones_de_memoria(self):
         """El reporte debe decir qué regiones lee y escribe cada PE, en qué posiciones y cuántas veces."""
         texto = "\n".join(ReporteCiclos(self.programa, self.malla).lineas())
@@ -140,6 +158,17 @@ class TestEstadisticasCiclos(ConReduccion2x2):
         self.assertIn("PE00 (-): lee a[0, 4, 8] (3 lecturas); lee b[0, 4, 8] (3 lecturas); "
                       "lee c[0, 4, 8] (3 lecturas); escribe c[0, 4, 8] (3 escrituras); "
                       "escribe result[0] (1 escritura)", texto)
+
+    def test_9_tablas_rectangulares_y_coordenadas_con_dos_digitos(self):
+        """Dividir una malla ancha en tablas no debe omitir ni duplicar PEs, incluso con identificadores largos."""
+        for filas, columnas in ((6, 4), (4, 6), (4, 4), (2, 11)):
+            with self.subTest(filas=filas, columnas=columnas):
+                malla = Malla(filas, columnas)
+                programa = Programa({p: {0: ISA.parsear("NOP")} for p in malla.ids()})
+                texto = "\n".join(ReporteCiclos(programa, malla).lineas())
+                detalle = texto.split("Detalle de todos los ciclos", 1)[1].split("7. MEMORIA FINAL", 1)[0]
+                for pe_id in malla.ids():
+                    self.assertEqual(detalle.count(f"{pe_id} (-): NOP"), 1)
 
 
 if __name__ == "__main__":

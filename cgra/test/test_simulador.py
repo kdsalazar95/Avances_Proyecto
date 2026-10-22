@@ -65,6 +65,35 @@ class TestSimulador(unittest.TestCase):
         self.assertRegex(texto, r"reduccion +ok +24 ciclos")
         self.assertRegex(texto, r"sin_compilar +error")
 
+    def test_4_reporte_completo_con_resultados_y_traza_integrada(self):
+        """El archivo y la terminal deben presentar las siete secciones y los valores reales, sin duplicar la traza."""
+        with contextlib.redirect_stdout(io.StringIO()) as salida:
+            self.simulador.correr("reduccion", mostrar_traza=True, mostrar_ciclos=True)
+        ruta = os.path.join(self.programas, "reduccion", "reporte_ciclos.txt")
+        with open(ruta, encoding="utf-8") as archivo:
+            reporte = archivo.read()
+        for titulo in ("1. CONFIGURACIÓN", "2. RESULTADO", "3. RESUMEN DE LA EJECUCIÓN",
+                       "4. DISTRIBUCIÓN DEL TRABAJO", "5. ACTIVIDAD POR PE",
+                       "6. EJECUCIÓN CICLO POR CICLO", "7. MEMORIA FINAL"):
+            self.assertEqual(reporte.count(titulo), 1)
+        self.assertIn("result = 60", reporte)
+        self.assertIn("result[0] = 60", reporte)
+        self.assertIn("Comparación con referencia: no realizada", reporte)
+        self.assertIn("Valores observados (traza):", reporte)
+        self.assertIn("[0..9] 2 4 6 8 2 4 6 8 2 4", reporte)
+        self.assertIn(reporte.rstrip(), salida.getvalue())
+        self.assertNotIn("TRAZA: ciclo | PE", salida.getvalue())
+
+    def test_5_sin_traza_no_inventa_valores_observados(self):
+        """Una corrida sin --traza también guarda resultados, pero no efectos por instrucción."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.simulador.correr("reduccion")
+        ruta = os.path.join(self.programas, "reduccion", "reporte_ciclos.txt")
+        with open(ruta, encoding="utf-8") as archivo:
+            reporte = archivo.read()
+        self.assertIn("result[0] = 60", reporte)
+        self.assertNotIn("Valores observados (traza):", reporte)
+
 
 if __name__ == "__main__":
     unittest.main()
