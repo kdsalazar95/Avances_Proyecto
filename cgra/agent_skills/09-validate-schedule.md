@@ -8,9 +8,8 @@ respect mesh communication.
 ## Checks
 
 Apply the [Mesh Compatibility Contract](mesh-compatibility.md), including its
-acceptance cases for later implementation. These documentation requirements
-do not establish runtime support until each layout has been implemented and
-validated against the shared loader.
+acceptance cases. The small-mesh layouts are resolved by `FormatoCGRA`; each
+generated program is still validated against the shared loader below.
 
 1. All `filas * columnas` PE files exist, one per PE of the mesh.
    Compare the complete set of generated `PE*.txt` filenames with the expected

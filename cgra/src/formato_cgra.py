@@ -10,6 +10,7 @@ RUTA_POR_DEFECTO = Path(__file__).with_name("cgra.json")
 BORDES = ("norte", "sur", "oeste", "este")
 PARIDADES = ("filas_pares", "filas_impares")  # la fila 0 es par
 CICLO = "ciclo_filas"
+ADAPTAR = "adaptar_mallas_pequenas"  # true: malla_pequena() reemplaza a 'distribucion' en mallas chicas
 INSTRUCCIONES_ISA = ISA.INSTRUCCIONES
 
 
@@ -137,8 +138,14 @@ class FormatoCGRA:
                 }
                 for letra, tipo in datos["tipos_pe"].items()
             }
+            adaptar = datos.get(ADAPTAR, False)
+            if type(adaptar) is not bool:
+                raise ValueError(f"'{ADAPTAR}' debe ser true o false")
+            pequena = malla_pequena(datos["filas"], datos["columnas"]) if adaptar else None
             if "malla" in datos:
                 malla = [fila.split() if isinstance(fila, str) else list(fila) for fila in datos["malla"]]
+            elif pequena is not None:
+                malla = pequena
             elif "distribucion" in datos:
                 malla = generar_malla(datos["filas"], datos["columnas"], datos["distribucion"])
             else:
@@ -146,6 +153,27 @@ class FormatoCGRA:
             return cls(datos["filas"], datos["columnas"], datos["palabras_memoria"], tipos_pe, malla, ancho_vector)
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"{ruta}: {error}") from None
+
+
+def malla_pequena(filas, columnas):
+    """Malla de una CGRA demasiado pequeña para la rotación E, V, C, o None si no lo es.
+
+    Con menos de 3 filas o columnas el cómputo es solo C (escalar y vectorial):
+
+        1x1                          G
+        Nx1                          M en la fila 0, C debajo
+        Nx2                          M C en cada fila
+        1 o 2 filas, 3+ columnas     M C ... C M
+    """
+    if filas == 1 and columnas == 1:
+        return [["G"]]
+    if columnas == 1:
+        return [["M"]] + [["C"] for _ in range(filas - 1)]
+    if columnas == 2:
+        return [["M", "C"] for _ in range(filas)]
+    if filas <= 2:
+        return [["M"] + ["C"] * (columnas - 2) + ["M"] for _ in range(filas)]
+    return None
 
 
 def generar_malla(filas, columnas, distribucion):

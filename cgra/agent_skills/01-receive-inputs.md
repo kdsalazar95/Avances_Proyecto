@@ -11,8 +11,8 @@ files disagree.
 Read the [Mesh Compatibility Contract](mesh-compatibility.md) first. Positive
 one- and two-column meshes are valid target sizes under its layout policy;
 they need capability/routing checks, not an unconditional minimum of 3 columns.
-The automatic small-layout resolver is a pending Python implementation: its
-absence is an implementation limitation, not proof that those sizes are invalid.
+`FormatoCGRA` resolves those layouts itself when `src/cgra.json` has
+`"adaptar_mallas_pequenas": true`, so a small size is never a reason to stop.
 
 For special layouts, apply cases in order: 1x1 uses G; Nx1 (N >= 2) uses
 M at row 0 and C below; Nx2 uses M C in every row; one/two-row meshes with
@@ -68,9 +68,11 @@ size is an example):
 
    A PE never executes an instruction outside its type; `run_cgra.py` refuses
    to load a program that does.
-   For adaptive automatic layouts, use the cases in the compatibility contract
-   only when the shared resolver returns that map. Explicit `malla` takes
-   precedence; existing concrete distributions keep their declared meaning.
+   With `"adaptar_mallas_pequenas": true`, a mesh with fewer than 3 rows or
+   columns prints the C-only layout of the compatibility contract (G in 1x1)
+   and larger meshes print the `distribucion`
+   (see [When E, V and C Cannot All Be Used](mesh-compatibility.md#when-e-v-and-c-cannot-all-be-used)).
+   Explicit `malla` takes precedence. Always compile for the printed map.
 3. Classify PEs into potentially overlapping **memory-capable** and
    **compute-capable** sets from their allowed instructions. A `G` belongs to
    both sets; it does not send data to itself. In the standard border layout,

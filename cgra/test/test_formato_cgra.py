@@ -131,6 +131,29 @@ class TestFormatoCGRA(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mezcla"):
             generar_malla(2, 3, {**ciclo, "resto": "C"})
 
+    def test_10b_mallas_pequenas_usan_solo_c(self):
+        """Con 'adaptar_mallas_pequenas', una malla con menos de 3 filas o columnas debe usar solo C para calcular (G en 1x1) en vez de la rotación E, V, C; desde 3x3 la rotación no cambia y 'malla' explícita sigue mandando."""
+        tipos = {**TIPOS, "G": {"nombre": "generico", "instrucciones": ["NOP", "LD", "ST", "ADD"]},
+                 "E": {"nombre": "escalar", "instrucciones": ["NOP", "ADD"]}}
+        ciclo = {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": letra} for letra in "ECC"]}
+        casos = {
+            (1, 1): ["G"], (3, 1): ["M", "C", "C"], (1, 2): ["M C"], (3, 2): ["M C"] * 3,
+            (1, 3): ["M C M"], (2, 3): ["M C M"] * 2, (2, 5): ["M C C C M"] * 2,
+            (3, 3): ["M E M", "M C M", "M C M"],
+        }
+        for (filas, columnas), mapa in casos.items():
+            ruta = self.escribir_json(filas=filas, columnas=columnas, tipos_pe=tipos, distribucion=ciclo,
+                                      adaptar_mallas_pequenas=True)
+            self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), mapa, f"{filas}x{columnas}")
+        ruta = self.escribir_json(filas=1, columnas=3, tipos_pe=tipos, distribucion=ciclo)
+        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M E M"])
+        ruta = self.escribir_json(filas=1, columnas=3, tipos_pe=tipos, distribucion=ciclo,
+                                  adaptar_mallas_pequenas=True, malla=["M E M"])
+        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M E M"])
+        ruta = self.escribir_json(filas=1, columnas=3, tipos_pe=tipos, distribucion=ciclo, adaptar_mallas_pequenas="si")
+        with self.assertRaisesRegex(ValueError, "true o false"):
+            FormatoCGRA.cargar(ruta)
+
     def test_11_cada_tipo_de_src_cgra_json_ejecuta_solo_lo_suyo(self):
         """En src/cgra.json, M solo debe acceder a memoria, E solo hacer aritmética escalar, V solo vectorial y C ambas; lo demás debe rechazarse."""
         formato = FormatoCGRA.cargar()

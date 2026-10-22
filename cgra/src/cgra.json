@@ -1,9 +1,10 @@
 {
-  "descripcion": "Formato de la CGRA: tamaño de la malla, memoria, ancho de los vectores y tipos de PE. Las columnas de los bordes (oeste y este) son solo de memoria (M); en el resto las filas rotan escalar (E), vectorial (V) y cómputo (C), que es escalar y vectorial a la vez (fila 0 E, fila 1 V, fila 2 C, fila 3 E...). Lo leen run_cgra.py (src/formato_cgra.py) y los skills (agent_skills/01-receive-inputs.md).",
-  "filas": 3,
+  "descripcion": "Formato de la CGRA: tamaño de la malla, memoria, ancho de los vectores y tipos de PE. Las columnas de los bordes (oeste y este) son solo de memoria (M); en el resto las filas rotan escalar (E), vectorial (V) y cómputo (C), que es escalar y vectorial a la vez (fila 0 E, fila 1 V, fila 2 C, fila 3 E...). Si la malla no alcanza para E, V y C (menos de 3 filas o columnas), con 'adaptar_mallas_pequenas' el cómputo es solo C (1x1: G; Nx1: M arriba y C debajo; Nx2: M C; 1 o 2 filas: M C ... C M) sin cambiar este archivo; desde 3x3 se usa la rotación. Una 'malla' explícita manda sobre ambas. Lo leen run_cgra.py (src/formato_cgra.py) y los skills (agent_skills/01-receive-inputs.md).",
+  "filas": 2,
   "columnas": 3,
   "palabras_memoria": 4096,
   "ancho_vector": 4,
+  "adaptar_mallas_pequenas": true,
   "tipos_pe": {
     "G": {
       "nombre": "generico",

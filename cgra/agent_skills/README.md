@@ -29,11 +29,10 @@ Apply the [Mesh Compatibility Contract](mesh-compatibility.md) throughout the
 pipeline. It defines automatic small layouts (singleton G, vertical M/C,
 two-column M C, and one/two-row meshes with M at both ends and C interiors),
 capability checks, compatible routes, scalar remainders
-and tiling. These are the requirements for the upcoming shared map resolver
-and scheduling implementation. This documentation update does not implement
-that support: use the actual simulator map, and report an implementation
-limitation if it cannot represent or schedule a requested layout. An existing
-explicit map or concrete distribution must never be silently changed.
+and tiling. `FormatoCGRA` resolves the small layouts when `src/cgra.json`
+has `"adaptar_mallas_pequenas": true`, and skill 07 has their schedules: a
+small mesh is never a reason to stop. Always use the actual simulator map. An
+existing explicit map or concrete distribution must never be silently changed.
 
 The exceptions apply in that order. Thus 2x3 is two M C M rows; 1x4 and
 2x4 use M C C M rows. Normal meshes with at least 3 rows and 3 columns keep
@@ -105,6 +104,10 @@ f mod 3 = 2:  M C C ... C M
 
 This picture describes the existing border distribution, not the narrow-mesh
 exceptions. A generic PE can fulfill both memory and compute roles locally.
+When the mesh cannot hold E, V and C (fewer than 3 rows or columns), only C is
+used for compute: `"adaptar_mallas_pequenas": true` in `src/cgra.json` makes
+the simulator generate that layout for any size (see
+[the contract](mesh-compatibility.md#when-e-v-and-c-cannot-all-be-used)).
 
 ## Instruction Set per PE Type
 

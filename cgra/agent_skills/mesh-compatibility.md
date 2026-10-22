@@ -1,19 +1,20 @@
 # Mesh Compatibility Contract
 
-This contract is shared by skills 01 and 05 to 09. It defines the intended
-support for small meshes and arbitrary explicit maps. The narrow-mesh policy
-still needs implementation in the shared Python map resolver and scheduler;
-editing these instructions alone does not add that runtime support. On every
+This contract is shared by skills 01 and 05 to 09. It defines the support for
+small meshes and arbitrary explicit maps. The small-mesh layout policy is
+implemented in `FormatoCGRA` (`malla_pequena()` in `src/formato_cgra.py`) and
+enabled with `"adaptar_mallas_pequenas": true` in `src/cgra.json`; the
+schedules for those layouts are the tables of skill 07. On every
 run, use the map and instruction lists actually returned by `FormatoCGRA`.
 Never compile for an imagined map that differs from the simulator's map.
 Report an unsupported layout separately from an impossible hardware mapping.
 
 ## Automatic Layout Policy
 
-Apply these cases in order when the shared resolver selects the adaptive
-automatic policy. Do not reinterpret an existing explicit `malla` or a concrete
-`distribucion` rule as an adaptive policy. The Python configuration interface
-for selecting that policy must be implemented before claiming automatic support.
+`FormatoCGRA` applies these cases in order when `src/cgra.json` has
+`"adaptar_mallas_pequenas": true` and no explicit `malla`; from 3x3 on it uses
+the `distribucion` unchanged. Without that key, the `distribucion` keeps its
+declared meaning at every size. An explicit `malla` always takes precedence.
 
 | Dimensions | Types and placement | Execution topology |
 |---|---|---|
@@ -37,6 +38,22 @@ not replace the E/V/C rotation for meshes with at least 3 rows and 3 columns.
 C already combines E and V arithmetic. Use G only where both memory and
 compute capability are needed, notably the singleton, not to replace C in
 the small layouts. No new ISA instructions are implied.
+
+### When E, V and C Cannot All Be Used
+
+The E/V/C rotation needs at least 3 compute rows to contain all three types.
+With fewer rows or columns (every case of the table above except the last),
+the rotation would leave the mesh without V or C PEs: for example 1x3 would be
+`M E M` (scalar only) and 2x3 would be `M E M` / `M V M` (no PE with both).
+In those cases use **only C** as the compute type, since C is E + V: every
+compute position of the table above is C, never E or V.
+
+`"adaptar_mallas_pequenas": true` makes `FormatoCGRA` apply this rule for any
+`filas` and `columnas`, so changing the size never requires editing the map:
+the agent compiles for the printed map and continues. If the key is missing or
+false and the printed map of a small mesh has E or V compute PEs, the compiler
+does not rewrite `cgra.json`: it compiles for the actual map (scalar on E,
+vector on V) and notes in the mesh summary that the key enables the C layout.
 
 `G` is a generic PE, not a new instruction: it combines the scalar memory,
 arithmetic, movement and communication instructions. It may also have the
