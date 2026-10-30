@@ -11,6 +11,8 @@ BORDES = ("norte", "sur", "oeste", "este")
 PARIDADES = ("filas_pares", "filas_impares")  # la fila 0 es par
 CICLO = "ciclo_filas"
 INSTRUCCIONES_ISA = ISA.INSTRUCCIONES
+TAMANO_MINIMO = 1  # malla 1x1
+TAMANO_MAXIMO = 32  # malla 32x32, el tamaño máximo
 
 
 class FormatoCGRA:
@@ -27,9 +29,22 @@ class FormatoCGRA:
 
     CAMPOS = ("filas", "columnas", "palabras_memoria")
 
-    def __init__(self, filas, columnas, palabras_memoria, tipos_pe=None, malla=None, ancho_vector=None):
-        if type(filas) is not int or type(columnas) is not int or filas <= 0 or columnas <= 0:
-            raise ValueError("La malla debe tener al menos una fila y una columna")
+    def __init__(
+        self, filas, columnas, palabras_memoria, tipos_pe=None, malla=None, ancho_vector=None,
+        tamano_malla=(TAMANO_MINIMO, TAMANO_MAXIMO),
+    ):
+        minimo, maximo = tamano_malla
+        if type(minimo) is not int or type(maximo) is not int or not TAMANO_MINIMO <= minimo <= maximo <= TAMANO_MAXIMO:
+            raise ValueError(
+                f"'tamano_malla' debe cumplir {TAMANO_MINIMO} <= minimo <= maximo <= {TAMANO_MAXIMO}"
+            )
+        if type(filas) is not int or type(columnas) is not int:
+            raise ValueError("'filas' y 'columnas' deben ser números enteros")
+        if not (minimo <= filas <= maximo and minimo <= columnas <= maximo):
+            raise ValueError(
+                f"La malla {filas}x{columnas} está fuera del rango permitido: "
+                f"filas y columnas de {minimo} a {maximo}"
+            )
         if type(palabras_memoria) is not int or palabras_memoria <= 0:
             raise ValueError("La memoria de la CGRA debe tener al menos una palabra")
         if ancho_vector is not None and (type(ancho_vector) is not int or ancho_vector <= 0):
@@ -127,8 +142,13 @@ class FormatoCGRA:
 
         try:
             ancho_vector = datos.get("ancho_vector")
+            rango = datos.get("tamano_malla", {})
+            tamano_malla = (rango.get("minimo", TAMANO_MINIMO), rango.get("maximo", TAMANO_MAXIMO))
             if "tipos_pe" not in datos:
-                return cls(datos["filas"], datos["columnas"], datos["palabras_memoria"], ancho_vector=ancho_vector)
+                return cls(
+                    datos["filas"], datos["columnas"], datos["palabras_memoria"],
+                    ancho_vector=ancho_vector, tamano_malla=tamano_malla,
+                )
             tipos_pe = {
                 letra: {
                     "nombre": tipo.get("nombre", letra),
@@ -143,7 +163,10 @@ class FormatoCGRA:
                 malla = generar_malla(datos["filas"], datos["columnas"], datos["distribucion"])
             else:
                 raise ValueError("falta 'malla' o 'distribucion' para asignar los tipos de PE")
-            return cls(datos["filas"], datos["columnas"], datos["palabras_memoria"], tipos_pe, malla, ancho_vector)
+            return cls(
+                datos["filas"], datos["columnas"], datos["palabras_memoria"], tipos_pe, malla, ancho_vector,
+                tamano_malla,
+            )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"{ruta}: {error}") from None
 

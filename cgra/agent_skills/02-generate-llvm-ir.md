@@ -48,7 +48,8 @@ array `c` is saved as `result`, and in `convolucion` `resultado` is saved as
 | `convolucion` | `imagen`, `kernel`, `result` (`TAMANO_SALIDA` x `TAMANO_SALIDA`) |
 
 The CGRA never generates or rewrites this memory by itself; `run_cgra.py` only
-loads it (and saves the results back with `--write-back`).
+loads it. `memoria.bin` is always the initial memory (results still at zero):
+the final memory is shown in the run's output and in `reporte_ciclos.txt`.
 
 ## Actions
 
