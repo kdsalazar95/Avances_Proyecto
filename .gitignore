@@ -1,3 +1,9 @@
+# Carpetas que empiezan con punto (.venv, .codex, .aws, .ruff_cache...), en cualquier nivel.
+.*/
+
+# Documentación local (enunciados y diseño): no se sube.
+/docs/
+
 .venv
 
 __pycache__/
@@ -28,3 +34,7 @@ graphs/
 !**/test/datos/**
 # ...pero los .txt de test/datos no se suben
 **/test/datos/**/*.txt
+
+# Ciclo RL: la configuración de corridas se sube; las corridas generadas no.
+!rl/config/*.json
+resultados/corridas/

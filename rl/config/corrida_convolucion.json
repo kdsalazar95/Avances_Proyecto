@@ -1,0 +1,95 @@
+{
+  "id": "r03-convolucion",
+  "descripcion": "Operación 'convolucion'; igual que corrida_reduccion.json: los Skills 01–09 los corre Codex (codex exec) y el agente que propone las configuraciones es Claude (política manual: 'prompt' y 'evaluar'). Son dos LLM en sesiones separadas: Codex no ve el historial ni las recompensas. La salida de Codex se guarda en vivo en eval/<id>/skills/intento-<n>.log (tail -f) y se puede convertir en GIF con 'python -m rl gif'.",
+  "operacion": "convolucion",
+  "fuente_c": "cgra/operaciones/operaciones.c",
+  "esquema_cgra": "cgra/src/cgra.json",
+  "restricciones": {
+    "filas": {
+      "minimo": 1,
+      "maximo": 32
+    },
+    "columnas": {
+      "minimo": 3,
+      "maximo": 32
+    },
+    "palabras_memoria_max": 4096,
+    "anchos_vector_permitidos": [
+      4
+    ],
+    "memoria_solo_en_bordes_oeste_este": true,
+    "requiere_memoria_y_computo": true
+  },
+  "pesos_area": {
+    "w1_MS": 4,
+    "w2_MV": 8,
+    "w3_CS": 1,
+    "w4_CV": 2
+  },
+  "K": {
+    "K_A": 1.0,
+    "K_L": 1.0,
+    "K_R": 1.0
+  },
+  "formula_latencia": "ciclos_x_nops",
+  "tolerancias": {
+    "eps_abs": 1e-06,
+    "eps_rel": 1e-06,
+    "epsilon_cr": 1e-09
+  },
+  "penalizacion": {
+    "P_fallo": 10.0
+  },
+  "tolerancia_empate_costo": 1e-09,
+  "limites": {
+    "max_iteraciones": 10,
+    "paciencia": 3,
+    "t_max_simulacion_s": 60,
+    "t_max_total_s": null
+  },
+  "referencia": {
+    "descripcion": "Malla 3x3 con memoria en los bordes oeste/este y cómputo escalar (E) y vectorial (V) en la columna central, sin PEs C. Pasa por el mismo evaluador que las candidatas.",
+    "generar": {
+      "malla": [
+        "M E M",
+        "M V M",
+        "M E M"
+      ]
+    }
+  },
+  "compilador": {
+    "descripcion": "Skills 01–09 con Codex. 'eco': muestra en la terminal lo que Codex va haciendo.",
+    "tipo": "comando",
+    "comando": [
+      "rl/herramientas/codex.sh",
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "--skip-git-repo-check",
+      "--color",
+      "never",
+      "{prompt}"
+    ],
+    "timeout_s": 1800,
+    "eco": true,
+    "N_corr": 2
+  },
+  "politica": {
+    "tipo": "manual",
+    "comando_ejemplo": [
+      "claude",
+      "-p",
+      "{prompt}",
+      "--permission-mode",
+      "acceptEdits"
+    ],
+    "timeout_s": 1800
+  },
+  "pendientes": [
+    "K_A, K_L, K_R: valores finales según la prioridad del experimento",
+    "eps_abs, eps_rel y tolerancia_empate_costo",
+    "P_fallo y su cota sobre los costos correctos (hoy la garantía es empírica)",
+    "max_iteraciones, paciencia, t_max_simulacion_s, N_corr y conjunto de instancias",
+    "comprobar que los Skills 01–09 compilan la referencia 3x3 'M E M / M V M / M E M' para cada operación"
+  ]
+}
