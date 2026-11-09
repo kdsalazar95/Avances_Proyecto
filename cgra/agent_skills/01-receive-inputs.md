@@ -25,13 +25,14 @@ the actual configured map before generating any PE programs.
 `src/cgra.json` describes the CGRA, so it does not have to be repeated in every
 request. The same file is read by `run_cgra.py` (`src/formato_cgra.py`), so the
 compiler and the simulator always target the same hardware. The CGRA has no
-fixed size: build it from this file on every run. A file looks like this (the
-size is an example):
+fixed size: `filas` and `columnas` are **ranges** (the sizes that may be
+used), and the concrete size of each run is chosen by whoever runs it (the
+user, or the Greedy agent). A file looks like this:
 
 ```json
 {
-  "filas": <filas>,
-  "columnas": <columnas>,
+  "filas":    {"minimo": 1, "maximo": 32},
+  "columnas": {"minimo": 1, "maximo": 32},
   "palabras_memoria": <palabras>,
   "ancho_vector": <W>,
   "tipos_pe": {
@@ -52,8 +53,12 @@ size is an example):
 
 `ancho_vector` is optional: without it the CGRA has no vector registers.
 
-1. Read `filas` and `columnas`: the mesh size (`filas x columnas`). Whatever
-   numbers they hold are the mesh for this run; never assume a size.
+1. Get the mesh size (`filas x columnas`) of this run. `cgra.json` only gives
+   the allowed ranges: take the size from the request (for example "3x4"), or
+   from a configuration file with fixed numbers (the agent writes one with an
+   explicit `malla`). If the request gives no size, ask for it; never assume
+   one. It must be inside the ranges. Pass the same size to every command
+   below and to `run_cgra.py` (`--filas`, `--columnas`).
 2. Get the type of every `PE{fila}{columna}`. The file gives it as a rule,
    `distribucion`, so the mesh follows `filas` and `columnas` without being
    rewritten: a PE on the `oeste`/`este`/`norte`/`sur` border takes that
@@ -63,7 +68,7 @@ size is an example):
    the instructions of each type with the same code `run_cgra.py` uses:
 
    ```sh
-   cd src && python3 -c "from formato_cgra import FormatoCGRA; f = FormatoCGRA.cargar(); print('\n'.join(f.mapa() + f.leyenda()))"
+   cd src && python3 -c "from formato_cgra import FormatoCGRA; f = FormatoCGRA.cargar(filas=<filas>, columnas=<columnas>); print('\n'.join(f.mapa() + f.leyenda()))"
    ```
 
    A PE never executes an instruction outside its type; `run_cgra.py` refuses
