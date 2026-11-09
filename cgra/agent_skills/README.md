@@ -20,8 +20,9 @@ things and executes them.
 
 The mesh and the problem do not have to be the same size: a larger problem is
 processed in tiles of the compute block, and a larger mesh leaves its extra PEs
-in `NOP`. The size is not fixed: every skill builds the CGRA from
-`src/cgra.json`.
+in `NOP`. The size is not fixed: `src/cgra.json` gives the allowed ranges of
+`filas` and `columnas`, and each run uses the concrete size given in the
+request (`--filas`/`--columnas` for `run_cgra.py`; see skill 01).
 
 ## Pipeline
 
