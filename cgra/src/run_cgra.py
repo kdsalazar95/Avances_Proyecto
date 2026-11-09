@@ -11,7 +11,9 @@ ejecuta lo que encuentra ahí:
 Basta con el nombre de la operación (``matmul``) para usar
 programas/<operacion>/, y ``todas`` corre, una tras otra, todas las
 operaciones de la tabla OPERACIONES de operaciones/operaciones.c. La CGRA en sí (tamaño de la malla y de la
-memoria) se describe en src/cgra.json, que también leen los skills.
+memoria) se describe en src/cgra.json, que también leen los skills. Si ahí
+'filas' y 'columnas' son rangos, el tamaño de cada corrida se elige con
+--filas y --columnas (ej. ``run_cgra.py matmul --filas 3 --columnas 4``).
 """
 
 import argparse
@@ -22,6 +24,7 @@ from cargador import Cargador
 from cgra import CGRA
 from consola import Consola
 from formato_cgra import RUTA_POR_DEFECTO, FormatoCGRA
+from memoria import ImagenMemoria
 from reporte_ciclos import ReporteCiclos
 from resultados import Resultados
 from traza import Traza
@@ -36,8 +39,10 @@ FUENTE_OPERACIONES = RAIZ_CGRA / "operaciones" / "operaciones.c"
 class SimuladorCGRA:
     """Enciende la CGRA, le carga un programa, lo ejecuta y muestra los resultados."""
 
-    def __init__(self, ruta_formato=RUTA_POR_DEFECTO, carpeta_programas=CARPETA_PROGRAMAS):
+    def __init__(self, ruta_formato=RUTA_POR_DEFECTO, carpeta_programas=CARPETA_PROGRAMAS, filas=None, columnas=None):
         self.ruta_formato = ruta_formato
+        self.filas = filas  # tamaño de la malla de esta corrida (si cgra.json da rangos)
+        self.columnas = columnas
         self.carpeta_programas = Path(carpeta_programas)
 
     def carpeta_del_programa(self, nombre):
@@ -57,7 +62,7 @@ class SimuladorCGRA:
             raise SystemExit(f"{fuente}: no se encontró la tabla OPERACIONES")
         return re.findall(r'\{\s*"(\w+)"\s*,', tabla.group(1))
 
-    def correr_todas(self, mostrar_traza=False, mostrar_ciclos=False, fuente=FUENTE_OPERACIONES):
+    def correr_todas(self, mostrar_traza=False, mostrar_ciclos=False, write_back=False, fuente=FUENTE_OPERACIONES):
         """Corre todas las operaciones, una tras otra, cada una con su memoria y
         sus programas en programas/<operacion>/.
 
@@ -68,7 +73,8 @@ class SimuladorCGRA:
         for operacion in self.operaciones(fuente):
             Consola.titulo(f"OPERACIÓN: {operacion}")
             try:
-                ciclos = self.correr(operacion, mostrar_traza=mostrar_traza, mostrar_ciclos=mostrar_ciclos)
+                ciclos = self.correr(operacion, mostrar_traza=mostrar_traza,
+                                     mostrar_ciclos=mostrar_ciclos, write_back=write_back)
                 resultados[operacion] = ciclos
             except SystemExit as error:
                 print(f"  {error}")
@@ -82,7 +88,7 @@ class SimuladorCGRA:
         return resultados
 
     def correr(self, programa, ruta_memoria=None, ruta_instrucciones=None,
-               mostrar_traza=False, mostrar_ciclos=False, ruta_reporte=None):
+               mostrar_traza=False, mostrar_ciclos=False, ruta_reporte=None, write_back=False):
         """Corre un programa y devuelve cuántos ciclos duró."""
         carpeta = self.carpeta_del_programa(programa)
         ruta_memoria = Path(ruta_memoria) if ruta_memoria else carpeta / "memoria.bin"
@@ -94,7 +100,7 @@ class SimuladorCGRA:
 
         # 1. Encender: la CGRA (según cgra.json) arranca con la memoria en cero.
         try:
-            cgra = CGRA(FormatoCGRA.cargar(self.ruta_formato))
+            cgra = CGRA(FormatoCGRA.cargar(self.ruta_formato, filas=self.filas, columnas=self.columnas))
         except ValueError as error:
             raise SystemExit(f"Formato de la CGRA inválido: {error}")
         # 2. Cargar: se copia la imagen de memoria y se prepara el programa.
@@ -131,6 +137,9 @@ class SimuladorCGRA:
         ruta_reporte.parent.mkdir(parents=True, exist_ok=True)
         reporte.guardar(ruta_reporte)
         print(f"\n  Reporte de ciclos guardado en {ruta_reporte}")
+        if write_back:
+            ImagenMemoria.desde_regiones(final, formas).guardar(ruta_memoria)
+            print(f"  Memoria con los resultados guardada en {ruta_memoria}")
         return len(programa_cargado.ciclos())
 
 
@@ -149,6 +158,18 @@ def main():
         help="Formato de la CGRA: tamaño de la malla y de la memoria (por defecto src/cgra.json)",
     )
     parser.add_argument(
+        "--filas", type=int, metavar="N",
+        help="Filas de la malla de esta corrida (obligatorio si cgra.json da un rango)",
+    )
+    parser.add_argument(
+        "--columnas", type=int, metavar="N",
+        help="Columnas de la malla de esta corrida (obligatorio si cgra.json da un rango)",
+    )
+    parser.add_argument(
+        "--write-back", action="store_true",
+        help="Guarda la memoria resultante (con los resultados) en el mismo memoria.bin",
+    )
+    parser.add_argument(
         "--traza", action="store_true",
         help="Muestra, ciclo por ciclo, qué instrucción ejecutó cada PE y qué escribió",
     )
@@ -158,7 +179,7 @@ def main():
         help="Guarda el reporte de ciclos en otra ruta (por defecto <programa>/reporte_ciclos.txt)",
     )
     argumentos = parser.parse_args()
-    simulador = SimuladorCGRA(argumentos.cgra)
+    simulador = SimuladorCGRA(argumentos.cgra, filas=argumentos.filas, columnas=argumentos.columnas)
     if argumentos.programa == "todas":
         # Cada operación usa su propia memoria, programas y reporte.
         por_operacion = [opcion for opcion, valor in (
@@ -171,6 +192,7 @@ def main():
         simulador.correr_todas(
             mostrar_traza=argumentos.traza,
             mostrar_ciclos=argumentos.ciclos,
+            write_back=argumentos.write_back,
         )
         return
     simulador.correr(
@@ -180,6 +202,7 @@ def main():
         mostrar_traza=argumentos.traza,
         mostrar_ciclos=argumentos.ciclos,
         ruta_reporte=argumentos.reporte_ciclos,
+        write_back=argumentos.write_back,
     )
 
 

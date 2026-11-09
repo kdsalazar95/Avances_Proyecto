@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 
 from memoria import ImagenMemoria
 from resultados import Resultados

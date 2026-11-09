@@ -8,12 +8,12 @@ import sys
 import tempfile
 import unittest
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 
 from memoria import ImagenMemoria
 
-FUENTE = os.path.join(_raiz_proyecto, "operaciones", "operaciones.c")
+FUENTE = os.path.join(_raiz_cgra, "operaciones", "operaciones.c")
 CLANG = shutil.which("clang-18") or shutil.which("clang")
 
 

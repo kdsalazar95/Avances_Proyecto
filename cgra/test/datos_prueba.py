@@ -10,8 +10,8 @@ Con a = b = [1, 2, 3, 4] * 3, c = [2, 4, 6, 8] * 3 y result = 60.
 import os
 import sys
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 
 from memoria import ImagenMemoria
 

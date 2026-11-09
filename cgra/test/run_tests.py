@@ -1,19 +1,22 @@
 """
-Corre todas las pruebas de test/, pero muestra los resultados de
+Corre las pruebas del simulador (cgra/test/), pero muestra los resultados de
 forma más fácil de leer: agrupados por sección, uno por línea, con un
 check (✔) o una X según haya pasado o fallado, y usando la explicación
 en español de cada prueba en vez de solo su nombre técnico.
 
 Cómo correrlo:
-    uv run python3 test/run_tests.py
+    uv run python3 cgra/test/run_tests.py
+
+Las pruebas de Dijkstra + Greedy están en dijkstra_greedy/tests/run_tests.py,
+que reutiliza ResultadoAmigable y correr() de este archivo.
 """
 import io
 import os
 import sys
 import unittest
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import test_malla
@@ -57,11 +60,11 @@ class ResultadoAmigable(unittest.TextTestResult):
     def _descripcion(self, test):
         # Junta todas las líneas del docstring en una sola oración
         # fluida (en vez de cortar solo la primera línea a la mitad).
-        doc = test._testMethodDoc
+        doc = getattr(test, "_testMethodDoc", None)
         if doc:
             lineas = [l.strip() for l in doc.strip().splitlines()]
             return " ".join(lineas)
-        return test._testMethodName
+        return getattr(test, "_testMethodName", str(test))
 
     def _seccion(self, test):
         nombre_clase = type(test).__name__
@@ -94,27 +97,10 @@ class ResultadoAmigable(unittest.TextTestResult):
         print(f"  \u2716  {self._descripcion(test)}  (error inesperado)")
 
 
-def main():
+def correr(orden_de_clases, nombres_de_seccion=None):
+    """Corre las clases en ese orden con la salida amigable; termina con 0 si todas pasan."""
+    NOMBRES_DE_SECCION.update(nombres_de_seccion or {})
     cargador = unittest.TestLoader()
-
-    # Se arma la suite en un orden narrativo específico (primero
-    # horizontal, luego vertical, luego comunicación bidireccional),
-    # en vez del orden alfabético por defecto de unittest.
-    orden_de_clases = [
-        test_malla.TestConectarMallaHorizontal,
-        test_malla.TestConectarMallaVertical,
-        test_malla.TestComunicacionBidireccional,
-        test_programa.TestEjecucionCGRA,
-        test_programa.TestEstadisticasCiclos,
-        test_resultados.TestMemoriaBinaria,
-        test_resultados.TestPresentacionResultado,
-        test_formato_cgra.TestFormatoCGRA,
-        test_cargador.TestCargador,
-        test_operaciones.TestOperaciones,
-        test_simulador.TestSimulador,
-        test_vectorial.TestPEVectorial,
-        test_vectorial.TestCGRAVectorial,
-    ]
     suite = unittest.TestSuite()
     for clase in orden_de_clases:
         suite.addTests(cargador.loadTestsFromTestCase(clase))
@@ -139,6 +125,27 @@ def main():
 
     sys.exit(0 if exitosas == total else 1)
 
+
+def main():
+    # Se arma la suite en un orden narrativo específico (primero
+    # horizontal, luego vertical, luego comunicación bidireccional),
+    # en vez del orden alfabético por defecto de unittest.
+    orden_de_clases = [
+        test_malla.TestConectarMallaHorizontal,
+        test_malla.TestConectarMallaVertical,
+        test_malla.TestComunicacionBidireccional,
+        test_programa.TestEjecucionCGRA,
+        test_programa.TestEstadisticasCiclos,
+        test_resultados.TestMemoriaBinaria,
+        test_resultados.TestPresentacionResultado,
+        test_formato_cgra.TestFormatoCGRA,
+        test_cargador.TestCargador,
+        test_operaciones.TestOperaciones,
+        test_simulador.TestSimulador,
+        test_vectorial.TestPEVectorial,
+        test_vectorial.TestCGRAVectorial,
+    ]
+    correr(orden_de_clases)
 
 if __name__ == "__main__":
     main()

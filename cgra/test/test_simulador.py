@@ -8,8 +8,8 @@ import sys
 import tempfile
 import unittest
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datos_prueba import escribir_reduccion_2x2
@@ -42,7 +42,9 @@ class TestSimulador(unittest.TestCase):
 
     def test_1_lee_las_operaciones_de_operaciones_c(self):
         """La lista de operaciones debe salir de la tabla OPERACIONES de operaciones.c, en su orden."""
-        self.assertEqual(SimuladorCGRA.operaciones(), ["reduccion", "matmul", "convolucion"])
+        # El simulador está en src/ de la raíz y operaciones.c en cgra/: se pasa la ruta (ver FLUJO_ETAPAS.md).
+        fuente = os.path.join(_raiz_cgra, "operaciones", "operaciones.c")
+        self.assertEqual(SimuladorCGRA.operaciones(fuente), ["reduccion", "matmul", "convolucion"])
         self.assertEqual(SimuladorCGRA.operaciones(self.fuente), ["reduccion", "sin_compilar"])
 
     def test_2_corre_una_operacion_por_su_nombre(self):
