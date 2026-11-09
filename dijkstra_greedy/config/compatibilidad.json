@@ -1,0 +1,26 @@
+{
+  "descripcion": "Tabla de compatibilidad del bloque Dijkstra (sustituye al skill 05). Cada operación del grafo de datos se traduce a una instrucción del ISA; los tipos de PE que la pueden ejecutar son los de src/cgra.json cuya lista 'instrucciones' contiene esa instrucción. 'llvm.fmuladd' no aparece: el adaptador del IR la separa en fmul + fadd (skill 04). Las operaciones v* las crea la vectorización (vectorizar.py). 'transferencia' son las instrucciones con que un PE manda o recibe un escalar ('enviar', 'recibir') o un vector ('enviar_vector', 'recibir_vector') de un vecino.",
+  "operaciones": {
+    "load": "LD",
+    "store": "ST",
+    "fadd": "ADD",
+    "fsub": "SUB",
+    "fmul": "MUL",
+    "fdiv": "DIV",
+    "const": "MOV",
+    "vload": "VLD",
+    "vstore": "VST",
+    "vadd": "VADD",
+    "vsub": "VSUB",
+    "vmul": "VMUL",
+    "vdiv": "VDIV",
+    "vbcast": "VBCAST",
+    "vredsum": "VREDSUM"
+  },
+  "transferencia": {
+    "enviar": "SEND",
+    "recibir": "RECV",
+    "enviar_vector": "VSEND",
+    "recibir_vector": "VRECV"
+  }
+}

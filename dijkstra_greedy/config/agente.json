@@ -1,0 +1,23 @@
+{
+  "descripcion": "Parámetros del agente Greedy (cadena de mejoras, determinístico). Los parámetros de evaluación (pesos, K, tolerancias, P_fallo, restricciones, referencia) no van aquí: están en costos.json, con los valores de la corrida RL.",
+  "max_evaluaciones": 10,
+  "paciencia": 3,
+  "max_rondas": 50,
+  "lado_minimo": null,
+  "lado_maximo": null,
+  "iniciales": "referencia",
+  "barrido": false,
+  "lote_barrido": 16,
+  "interior_alternativo": "C",
+  "procesos": null,
+  "comentarios": {
+    "max_evaluaciones / paciencia": "Presupuesto del contrato con el RL (solucion_rl.md, fila 19): el mismo max_iteraciones y paciencia de la corrida RL con que se compara (corrida_todas_codex: 10 y 3; r05-exploracion: 1000 y 1000). max_evaluaciones no cuenta la referencia; paciencia cuenta evaluaciones seguidas que no bajan el mínimo en más de tolerancia_empate_costo (error_infraestructura no cuenta). null = sin límite.",
+    "max_rondas": "Máximo de rondas de vecinas. La búsqueda termina antes si se agota el presupuesto o si ninguna vecina de la mejor baja el costo.",
+    "lado_minimo / lado_maximo": "Límites propios del agente para filas y columnas, dentro de las restricciones de costos.json (null = sin límite propio).",
+    "iniciales": "'referencia': la ronda 0 es la referencia de costos.json (contrato, fila 18). Una lista de tamaños [filas, columnas] parte de la distribución de cgra.json (no cumple el contrato).",
+    "barrido": "Ronda 0 alternativa: todos los tamaños, de menos a más PEs, con cotas por área. Apagado: no empieza en la referencia (contrato, fila 18).",
+    "lote_barrido": "Tamaños por lote del barrido.",
+    "interior_alternativo": "Con iniciales por tamaño o barrido: además de cada malla de la distribución, una variante con todos los PEs que no son de memoria de este tipo (null = sin variante).",
+    "procesos": "Procesos para evaluar en paralelo en la búsqueda en memoria (null = uno por núcleo, 1 = sin paralelismo). No cambia el resultado."
+  }
+}

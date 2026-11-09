@@ -1,0 +1,54 @@
+{
+  "descripcion": "Parámetros de evaluación de Dijkstra + Greedy. Son los mismos de la corrida RL (rl/config/corrida_todas_codex.json), para que los costos se puedan comparar (solucion_rl.md, sección 10). Si cambian en el RL, cambian aquí.",
+  "pesos_area": {
+    "w1_MS": 4,
+    "w2_MV": 8,
+    "w3_CS": 1,
+    "w4_CV": 2
+  },
+  "capacidades": {
+    "MS": ["LD", "ST"],
+    "MV": ["VLD", "VST"],
+    "CS": ["ADD", "SUB", "MUL", "DIV"],
+    "CV": ["VADD", "VSUB", "VMUL", "VDIV"]
+  },
+  "K": {
+    "K_A": 1.0,
+    "K_L": 1.0,
+    "K_R": 1.0
+  },
+  "formula_latencia": "ciclos_x_nops",
+  "tolerancias": {
+    "eps_abs": 1e-06,
+    "eps_rel": 1e-06,
+    "epsilon_cr": 1e-09
+  },
+  "penalizacion": {
+    "P_fallo": 10.0
+  },
+  "tolerancia_empate_costo": 1e-09,
+  "limites": {
+    "t_max_simulacion_s": 60
+  },
+  "restricciones": {
+    "filas": {"minimo": 1, "maximo": 32},
+    "columnas": {"minimo": 3, "maximo": 32},
+    "palabras_memoria_max": 4096,
+    "anchos_vector_permitidos": [4],
+    "memoria_solo_en_bordes_oeste_este": true,
+    "requiere_memoria_y_computo": true
+  },
+  "referencia": {
+    "malla": ["M E M", "M V M", "M E M"],
+    "normalizadores": "normalizacion.json"
+  },
+  "comentarios": {
+    "pesos_area / capacidades": "C_A = w1·n_MS + w2·n_MV + w3·n_CS + w4·n_CV. Un PE tiene una capacidad si su lista 'instrucciones' de cgra.json contiene alguna de esas instrucciones: M = 12, E = 1, V = 2, C = 3, G = 15.",
+    "formula_latencia": "'ciclos_x_nops': C_L = ciclos·(1 + NOPs/(ciclos·PEs)). 'ciclos': C_L = ciclos. Se calcula por operación.",
+    "costo": "C = promedio sobre las operaciones de (K_A·C_A/C_A_ref + K_L·C_L,op/C_L_ref,op + K_R·C_R,op), solo si todas son correctas. Si no, C = P_fallo.",
+    "tolerancias": "Correcta solo si cada elemento cumple |y − ŷ| ≤ eps_abs + eps_rel·|y|. C_R = promedio de |y − ŷ|/(|y| + epsilon_cr).",
+    "limites.t_max_simulacion_s": "El simulador (run_cgra.py) corre en otro proceso con este tiempo máximo; si lo supera, fallo_simulador.",
+    "restricciones": "Validación previa (rl/agente/paquete.py): columnas oeste y este solo M, interior E/V/C, al menos un PE de memoria y uno de cómputo. Lo que no cumple es accion_invalida.",
+    "referencia": "Configuración inicial de Greedy (C_best,0 = C_ref). 'normalizadores': C_A_ref y C_L_ref por operación medidos una vez con la solución RL y congelados; una operación que no esté en el archivo se normaliza con la referencia medida por este evaluador."
+  }
+}
