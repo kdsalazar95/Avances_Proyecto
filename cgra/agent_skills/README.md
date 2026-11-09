@@ -20,23 +20,23 @@ things and executes them.
 
 The mesh and the problem do not have to be the same size: a larger problem is
 processed in tiles of the compute block, and a larger mesh leaves its extra PEs
-in `NOP`. The size is not fixed: every skill builds the CGRA from
-`src/cgra.json`.
+in `NOP`. The size is not fixed: `src/cgra.json` gives the allowed ranges of
+`filas` and `columnas`, and each run uses the concrete size given in the
+request (`--filas`/`--columnas` for `run_cgra.py`; see skill 01).
 
 ## Pipeline
 
 Apply the [Mesh Compatibility Contract](mesh-compatibility.md) throughout the
-pipeline. It defines automatic small layouts (singleton G, vertical M/C,
-two-column M C, and one/two-row meshes with M at both ends and C interiors),
+pipeline. It defines the valid sizes (at least 3 columns: one- and two-column
+meshes are not valid targets), the one-row layout (M at both ends and C
+interiors),
 capability checks, compatible routes, scalar remainders
-and tiling. `FormatoCGRA` resolves the small layouts when `src/cgra.json`
-has `"adaptar_mallas_pequenas": true`, and skill 07 has their schedules: a
-small mesh is never a reason to stop. Always use the actual simulator map. An
+and tiling. `FormatoCGRA` resolves the one-row layout when `src/cgra.json`
+has `"adaptar_mallas_pequenas": true`, and skill 07 has its schedules. Always use the actual simulator map. An
 existing explicit map or concrete distribution must never be silently changed.
 
-The exceptions apply in that order. Thus 2x3 is two M C M rows; 1x4 and
-2x4 use M C C M rows. Normal meshes with at least 3 rows and 3 columns keep
-the original E/V/C row rotation and scheduling instructions.
+Compute rows cycle E, V; C appears only when there is a single row (1xN).
+Thus 1x3 is M C M and 1x4 is M C C M, while 2x3 is M E M / M V M.
 
 Existing files in `programas/<operacion>/` are generated outputs, not inputs
 that prevent compilation. On every invocation, rebuild the IR, graphs, initial
@@ -91,23 +91,22 @@ G = generico   memory and scalar compute; vector ISA when configured
 ```
 
 The `distribucion` of `src/cgra.json` (`ciclo_filas`) rotates the compute rows
-escalar, vectorial, computo: row `f` is `E`, `V` or `C` for `f mod 3` = 0, 1, 2:
+escalar, vectorial: row `f` is `E` or `V` for `f mod 2` = 0, 1:
 
 ```text
 memory PEs:   PE(f, 0) and PE(f, columnas - 1), for every row f
 compute PEs:  PE(f, c) with 1 <= c <= columnas - 2
 
-f mod 3 = 0:  M E E ... E M
-f mod 3 = 1:  M V V ... V M
-f mod 3 = 2:  M C C ... C M
+f mod 2 = 0:  M E E ... E M
+f mod 2 = 1:  M V V ... V M
 ```
 
-This picture describes the existing border distribution, not the narrow-mesh
-exceptions. A generic PE can fulfill both memory and compute roles locally.
-When the mesh cannot hold E, V and C (fewer than 3 rows or columns), only C is
+This picture describes the existing border distribution, not the one-row
+exception. A generic PE can fulfill both memory and compute roles locally.
+When the mesh has a single compute row, so E and V do not both fit, only C is
 used for compute: `"adaptar_mallas_pequenas": true` in `src/cgra.json` makes
-the simulator generate that layout for any size (see
-[the contract](mesh-compatibility.md#when-e-v-and-c-cannot-all-be-used)).
+the simulator generate the right layout for any size (see
+[the contract](mesh-compatibility.md#when-to-use-c)).
 
 ## Instruction Set per PE Type
 

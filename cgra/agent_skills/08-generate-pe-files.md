@@ -4,10 +4,9 @@
 
 Write one text file per PE containing its instruction stream.
 
-Apply the [Mesh Compatibility Contract](mesh-compatibility.md). Small meshes
-also get exactly filas * columnas files: 1x1 gets only PE00.txt, 1x2 gets
-PE00.txt/PE01.txt, and 2x1 gets PE00.txt/PE10.txt. Do not invent extra border
-PEs. Use the actual simulator map and permissions for every header.
+Apply the [Mesh Compatibility Contract](mesh-compatibility.md). Every mesh
+gets exactly filas * columnas files: 1x3 gets PE00.txt/PE01.txt/PE02.txt. Do
+not invent extra border PEs. Use the actual simulator map and permissions for every header.
 
 ## Output Directory
 
@@ -22,13 +21,15 @@ Create the directory if it does not exist.
 ## Output Files
 
 One file per PE of the mesh, `PE{fila}{columna}.txt`, using the identifiers of
-skill 06. For a `2x2` mesh:
+skill 06. For a `2x3` mesh:
 
 ```text
 PE00.txt
 PE01.txt
+PE02.txt
 PE10.txt
 PE11.txt
+PE12.txt
 ```
 
 A `3x3` mesh needs `PE00.txt` through `PE22.txt`. A mesh with 11 or more rows or

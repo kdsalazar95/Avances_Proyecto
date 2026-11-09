@@ -8,32 +8,35 @@ files disagree.
 
 ## Reading the Configuration
 
-Read the [Mesh Compatibility Contract](mesh-compatibility.md) first. Positive
-one- and two-column meshes are valid target sizes under its layout policy;
-they need capability/routing checks, not an unconditional minimum of 3 columns.
-`FormatoCGRA` resolves those layouts itself when `src/cgra.json` has
-`"adaptar_mallas_pequenas": true`, so a small size is never a reason to stop.
+Read the [Mesh Compatibility Contract](mesh-compatibility.md) first. A valid
+target mesh has **at least 3 columns** (and at least 1 row): the west and east
+columns hold the memory PEs (M) and the compute PEs go between them. One- and
+two-column meshes are not valid targets: report them as an unsupported
+configuration and do not generate PE programs for them. A single row is valid.
 
-For special layouts, apply cases in order: 1x1 uses G; Nx1 (N >= 2) uses
-M at row 0 and C below; Nx2 uses M C in every row; one/two-row meshes with
-at least 3 columns keep M at both ends and use C at every interior position.
-For example, 2x3 is M C M in both rows. Only meshes with at least 3 rows and
-3 columns use the original E/V/C row rotation below. This is an exception
-policy, not a change to the original normal-mesh instructions. Always match
-the actual configured map before generating any PE programs.
+Compute rows cycle E, V. C (E + V) is used only when there is a single
+compute row, so E and V do not both fit: one-row meshes keep M at both ends
+and use C at every interior position (1x3 is M C M, 1x4 is M C C M).
+`FormatoCGRA` resolves that layout itself when `src/cgra.json` has
+`"adaptar_mallas_pequenas": true`. Meshes with at least 2 rows use the E, V
+row rotation of the `distribucion` (2x3 is M E M / M V M). An explicit
+`malla` replaces both. Always match the actual configured map before
+generating any PE programs.
 
 `src/cgra.json` describes the CGRA, so it does not have to be repeated in every
 request. The same file is read by `run_cgra.py` (`src/formato_cgra.py`), so the
 compiler and the simulator always target the same hardware. The CGRA has no
-fixed size: build it from this file on every run. A file looks like this (the
-size is an example):
+fixed size: `filas` and `columnas` are **ranges** (the sizes that may be
+used), and the concrete size of each run is chosen by whoever runs it (the
+user, or the RL agent). A file looks like this:
 
 ```json
 {
-  "filas": <filas>,
-  "columnas": <columnas>,
+  "filas":    {"minimo": 1, "maximo": 32},
+  "columnas": {"minimo": 1, "maximo": 32},
   "palabras_memoria": <palabras>,
   "ancho_vector": <W>,
+  "adaptar_mallas_pequenas": true,
   "tipos_pe": {
     "M": {"nombre": "memoria",   "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV", "VLD", "VST", "VSEND", "VRECV"]},
     "E": {"nombre": "escalar",   "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]},
@@ -52,8 +55,14 @@ size is an example):
 
 `ancho_vector` is optional: without it the CGRA has no vector registers.
 
-1. Read `filas` and `columnas`: the mesh size (`filas x columnas`). Whatever
-   numbers they hold are the mesh for this run; never assume a size.
+1. Get the mesh size (`filas x columnas`) of this run. When `cgra.json` gives
+   ranges, take the size from the request (for example "3x4"); when it gives
+   fixed numbers (as the configurations written by the RL agent, with an
+   explicit `malla`), that is the size. If a range is given and the request
+   has no size, ask for it; never assume one. It must be inside the ranges.
+   Pass the same size to every command below and to `run_cgra.py`
+   (`--filas`, `--columnas`); `FormatoCGRA` rejects a missing or out-of-range
+   size.
 2. Get the type of every `PE{fila}{columna}`. The file gives it as a rule,
    `distribucion`, so the mesh follows `filas` and `columnas` without being
    rewritten: a PE on the `oeste`/`este`/`norte`/`sur` border takes that
@@ -63,15 +72,15 @@ size is an example):
    the instructions of each type with the same code `run_cgra.py` uses:
 
    ```sh
-   cd src && python3 -c "from formato_cgra import FormatoCGRA; f = FormatoCGRA.cargar(); print('\n'.join(f.mapa() + f.leyenda()))"
+   cd src && python3 -c "from formato_cgra import FormatoCGRA; f = FormatoCGRA.cargar(filas=<filas>, columnas=<columnas>); print('\n'.join(f.mapa() + f.leyenda()))"
    ```
 
    A PE never executes an instruction outside its type; `run_cgra.py` refuses
    to load a program that does.
-   With `"adaptar_mallas_pequenas": true`, a mesh with fewer than 3 rows or
-   columns prints the C-only layout of the compatibility contract (G in 1x1)
-   and larger meshes print the `distribucion`
-   (see [When E, V and C Cannot All Be Used](mesh-compatibility.md#when-e-v-and-c-cannot-all-be-used)).
+   With `"adaptar_mallas_pequenas": true`, a single-row mesh prints the layout
+   of the compatibility contract (M at both ends, C in the interior) and
+   meshes with at least 2 rows print the `distribucion`
+   (see [When to Use C](mesh-compatibility.md#when-to-use-c)).
    Explicit `malla` takes precedence. Always compile for the printed map.
 3. Classify PEs into potentially overlapping **memory-capable** and
    **compute-capable** sets from their allowed instructions. A `G` belongs to
@@ -109,8 +118,8 @@ size is an example):
    run; the later skills apply their rules to it.
 
    If the file has no `tipos_pe`, every PE is generic and runs the whole ISA.
-   Use the compatible topology from the contract, including local execution
-   for `1x1`. Do not impose two memory borders on a one- or two-column mesh.
+   Use the compatible topology from the contract. The mesh still needs at
+   least 3 columns.
 4. Read `palabras_memoria`: the size of the data memory, in words. The
    `memoria.bin` of the program must fit in it.
 5. Decide the **mode** per operation. It is `vectorial` when the file has
@@ -230,8 +239,7 @@ The mesh and the problem do **not** have to match:
 6. Eligible compute PEs own work, including `G` when it also accesses memory.
    Record explicit work lists and tile rounds. Only the standard rectangular
    scalar border layout uses `tile_filas = filas`, `tile_columnas = columnas - 2`.
-   Other topologies use eligible-list tiling; never construct zero/negative
-   tile dimensions for narrow meshes.
+   Other topologies use eligible-list tiling.
 
 ## Outputs
 

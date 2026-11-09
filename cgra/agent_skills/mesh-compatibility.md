@@ -1,59 +1,63 @@
 # Mesh Compatibility Contract
 
-This contract is shared by skills 01 and 05 to 09. It defines the support for
-small meshes and arbitrary explicit maps. The small-mesh layout policy is
-implemented in `FormatoCGRA` (`malla_pequena()` in `src/formato_cgra.py`) and
-enabled with `"adaptar_mallas_pequenas": true` in `src/cgra.json`; the
-schedules for those layouts are the tables of skill 07. On every
+This contract is shared by skills 01 and 05 to 09. It defines the valid mesh
+sizes, the single-row layout and arbitrary explicit maps. The single-row
+layout is implemented in `FormatoCGRA` (`malla_pequena()` in
+`src/formato_cgra.py`) and enabled with `"adaptar_mallas_pequenas": true` in
+`src/cgra.json`; its schedules are in skill 07. On every
 run, use the map and instruction lists actually returned by `FormatoCGRA`.
 Never compile for an imagined map that differs from the simulator's map.
 Report an unsupported layout separately from an impossible hardware mapping.
 
+## Valid Mesh Sizes
+
+A target mesh has at least 1 row and **at least 3 columns** (up to the limits
+of `src/cgra.json`). The west and east columns hold the memory PEs (M) and the
+compute PEs go between them, so there is always at least one interior compute
+column. One- and two-column meshes (1x1, 1x2, 2x1, Nx1, Nx2) are **not** valid
+targets: report them as an unsupported configuration (skill 01) and do not
+generate PE programs for them.
+
 ## Automatic Layout Policy
 
-`FormatoCGRA` applies these cases in order when `src/cgra.json` has
-`"adaptar_mallas_pequenas": true` and no explicit `malla`; from 3x3 on it uses
-the `distribucion` unchanged. Without that key, the `distribucion` keeps its
-declared meaning at every size. An explicit `malla` always takes precedence.
+`FormatoCGRA` applies these cases when `src/cgra.json` has
+`"adaptar_mallas_pequenas": true` and no explicit `malla`. Without that key,
+the `distribucion` keeps its declared meaning at every size. An explicit
+`malla` always takes precedence.
 
 | Dimensions | Types and placement | Execution topology |
 |---|---|---|
-| `1x1` | `G` | local loads, arithmetic and stores on the same PE |
-| `Nx1`, `N >= 2` | `M` at row 0, `C` at rows 1 to N-1 | vertical shared memory server |
-| `Nx2`, `N >= 1` | each row is `M C` | one horizontal server/compute pair per row |
-| 1 or 2 rows, at least 3 columns | west/east `M`; every interior PE is `C` | two-server rows with 3 columns; nearest compatible border server and relays with more columns |
-| at least 3 rows and at least 3 columns | west/east `M`; interior rows cycle `E`, `V`, `C` | existing border layout, unchanged |
+| 1 row, at least 3 columns | west/east `M`; every interior PE is `C` | two servers with 3 columns; nearest compatible border server and relays with more columns |
+| at least 2 rows and at least 3 columns | west/east `M`; interior rows cycle `E`, `V` (row 0 `E`) | border layout of the `distribucion` |
 
-Dimensions are always rows x columns. Apply the singleton, one-column and
-two-column cases before the row-count cases. In particular, 1x3 is `M C M`,
-2x3 has two `M C M` rows, and 1x4/2x4 have `M C C M` rows. Both 1x10 and
-2x10 keep memory at both ends and C throughout the interior. Do not use
-`M C C` for 2x3 under this policy. Only the narrow exceptions can omit the
-east memory column: Nx2 uses `M C`, Nx1 uses vertical M/C, and 1x1 uses G.
-Transposing a shape can change its assignment: 1x3 and 3x1 have different
-memory servers and routes.
+Dimensions are always rows x columns. In particular, 1x3 is `M C M`, 1x4 is
+`M C C M`, 2x3 is `M E M` / `M V M` and 2x4 is `M E E M` / `M V V M`. 1x10
+keeps memory at both ends and C throughout the interior. Every valid mesh has
+memory in both the west and the east column.
 
-These special-case rules supplement the original normal-mesh rules; they do
-not replace the E/V/C rotation for meshes with at least 3 rows and 3 columns.
-C already combines E and V arithmetic. Use G only where both memory and
-compute capability are needed, notably the singleton, not to replace C in
-the small layouts. No new ISA instructions are implied.
+C already combines E and V arithmetic. G is not used by the automatic layouts.
+No new ISA instructions are implied.
 
-### When E, V and C Cannot All Be Used
+### When to Use C
 
-The E/V/C rotation needs at least 3 compute rows to contain all three types.
-With fewer rows or columns (every case of the table above except the last),
-the rotation would leave the mesh without V or C PEs: for example 1x3 would be
-`M E M` (scalar only) and 2x3 would be `M E M` / `M V M` (no PE with both).
-In those cases use **only C** as the compute type, since C is E + V: every
-compute position of the table above is C, never E or V.
+The compute rows cycle `E`, `V`, so a mesh holds both scalar and vector compute
+PEs as soon as it has **two compute rows**. Then C is never used: scalar work
+goes to E, vector work to V, and the scalar tail of a vector split goes to E.
+Only a mesh with a **single row** (1xN, N >= 3) cannot hold both E and V.
+There every compute position is **C**, since C is E + V.
+
+| Rows | Compute types | Meshes |
+|---|---|---|
+| 1 | only `C` | `1xN` (N >= 3) |
+| 2 or more | `E`, `V`, `E`, ... (never `C`) | at least 2 rows and 3 columns |
 
 `"adaptar_mallas_pequenas": true` makes `FormatoCGRA` apply this rule for any
-`filas` and `columnas`, so changing the size never requires editing the map:
-the agent compiles for the printed map and continues. If the key is missing or
-false and the printed map of a small mesh has E or V compute PEs, the compiler
-does not rewrite `cgra.json`: it compiles for the actual map (scalar on E,
-vector on V) and notes in the mesh summary that the key enables the C layout.
+valid `filas` and `columnas`, so changing the size never requires editing the
+map: the agent compiles for the printed map and continues. If the key is
+missing or false, the `distribucion` keeps its declared meaning at every size
+(a 1x3 is `M E M`, scalar only): the compiler does not rewrite `cgra.json`,
+compiles for the actual map (scalar on E, vector on V) and notes in the mesh
+summary that the key enables the C layout of single-row meshes.
 
 `G` is a generic PE, not a new instruction: it combines the scalar memory,
 arithmetic, movement and communication instructions. It may also have the
@@ -65,7 +69,8 @@ already describes generic PEs; classify their capabilities in the same way.
 
 ## Capability Checks Before Mapping Work
 
-Dimensions and memory capacity must be positive integers. Vector width, when
+Dimensions and memory capacity must be positive integers, with at least 3
+columns (see Valid Mesh Sizes). Vector width, when
 present, must also be a positive integer. Reject malformed maps, undefined PE
 types or vector instruction declarations without vector hardware through the
 shared configuration validator; do not silently repair them in the compiler.
@@ -132,9 +137,7 @@ For an arbitrary explicit map, choose a feasible subset of compute PEs instead
 of requiring every compute PE to participate. Unused PEs may still relay.
 
 The border-layout reduction route in skill 06 is a specialization, not a
-universal requirement. In a column, reduce upward through compatible compute
-PEs and send the result to the memory at row 0. With `G` alone, store locally.
-With an arbitrary map, select a compatible reduction tree or gather partials
+universal requirement. With an arbitrary map, select a compatible reduction tree or gather partials
 at a reachable accumulator. A scalar tree needs `ADD` at its combining nodes;
 a `V` can relay scalars but cannot add them. A connected vector tree can instead
 combine vector partials with `VADD`, then run `VREDSUM` once at its root.
@@ -148,8 +151,7 @@ there is no inter-compute reduction, only a local sum and output transfer.
 
 ## Tiling Contract
 
-Use the ordered eligible compute lists from the manifest. Do not calculate a
-zero-width tile using `columnas - 2` for one- or two-column meshes.
+Use the ordered eligible compute lists from the manifest.
 
 - Scalar outputs: unit e goes to eligible PE `e mod P_s` in round `e // P_s`.
 - Vector outputs: a unit is W contiguous columns in one output row; unit e
@@ -170,11 +172,11 @@ zero-width tile using `columnas - 2` for one- or two-column meshes.
 
 ## Acceptance Cases for the Later Implementation
 
-Validate the three source operations with automatic layouts `1x1`, `1x2`,
-`2x1`, `1x3`, `3x1`, `2x2`, `3x2`, `1x4`, `2x3`, `2x4`, `1x10`, `2x10`,
-`3x4`, `4x3` and a normal wider mesh such as `6x10`. Check that 2x3 uses
-two M C M rows, narrow cases follow their own precedence, and normal meshes
-keep the original E/V/C row rotation. Cover both dimension orderings, exact and partial vector units,
+Validate the three source operations with automatic layouts `1x3`, `1x4`,
+`2x3`, `2x4`, `1x10`, `2x10`, `3x4`, `4x3` and a normal wider mesh such as
+`6x10`. Check that C appears only with a single row (1xN), that 2x3 is
+`M E M` / `M V M`, that every mesh with two or more rows uses the E, V row
+rotation, and that one- and two-column meshes are reported as unsupported. Cover both dimension orderings, exact and partial vector units,
 multiple tile rounds, inactive edge units and coordinate widths beyond one digit.
 Also cover explicit all-memory, all-compute, scalar-only, vector-only with/without
 tails, mixed rows with blocked vector routes, consecutive V reduction nodes,

@@ -65,11 +65,11 @@ cd src && python3 -c "
 from cargador import Cargador
 from cgra import CGRA
 from formato_cgra import FormatoCGRA
-Cargador(CGRA(FormatoCGRA.cargar())).cargar('../programas/<operacion>/memoria.bin', '../programas/<operacion>/pe_instructions')
+Cargador(CGRA(FormatoCGRA.cargar(filas=<filas>, columnas=<columnas>))).cargar('../programas/<operacion>/memoria.bin', '../programas/<operacion>/pe_instructions')
 print('Carga valida')"
 ```
 
-Then run `uv run src/run_cgra.py <operacion>` and compare the result with what
+Then run `uv run src/run_cgra.py <operacion> --filas <filas> --columnas <columnas>` and compare the result with what
 `<operacion>()` of `operaciones/operaciones.c` computes (checks 7-10).
 
 ## Per Operation

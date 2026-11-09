@@ -11,7 +11,9 @@ ejecuta lo que encuentra ahí:
 Basta con el nombre de la operación (``matmul``) para usar
 programas/<operacion>/, y ``todas`` corre, una tras otra, todas las
 operaciones de la tabla OPERACIONES de operaciones/operaciones.c. La CGRA en sí (tamaño de la malla y de la
-memoria) se describe en src/cgra.json, que también leen los skills.
+memoria) se describe en src/cgra.json, que también leen los skills. Si ahí
+'filas' y 'columnas' son rangos, el tamaño de cada corrida se elige con
+--filas y --columnas (ej. ``run_cgra.py matmul --filas 3 --columnas 4``).
 """
 
 import argparse
@@ -37,8 +39,10 @@ FUENTE_OPERACIONES = RAIZ_CGRA / "operaciones" / "operaciones.c"
 class SimuladorCGRA:
     """Enciende la CGRA, le carga un programa, lo ejecuta y muestra los resultados."""
 
-    def __init__(self, ruta_formato=RUTA_POR_DEFECTO, carpeta_programas=CARPETA_PROGRAMAS):
+    def __init__(self, ruta_formato=RUTA_POR_DEFECTO, carpeta_programas=CARPETA_PROGRAMAS, filas=None, columnas=None):
         self.ruta_formato = ruta_formato
+        self.filas = filas  # tamaño de la malla de esta corrida (si cgra.json da rangos)
+        self.columnas = columnas
         self.carpeta_programas = Path(carpeta_programas)
 
     def carpeta_del_programa(self, nombre):
@@ -96,7 +100,7 @@ class SimuladorCGRA:
 
         # 1. Encender: la CGRA (según cgra.json) arranca con la memoria en cero.
         try:
-            cgra = CGRA(FormatoCGRA.cargar(self.ruta_formato))
+            cgra = CGRA(FormatoCGRA.cargar(self.ruta_formato, filas=self.filas, columnas=self.columnas))
         except ValueError as error:
             raise SystemExit(f"Formato de la CGRA inválido: {error}")
         # 2. Cargar: se copia la imagen de memoria y se prepara el programa.
@@ -154,6 +158,14 @@ def main():
         help="Formato de la CGRA: tamaño de la malla y de la memoria (por defecto src/cgra.json)",
     )
     parser.add_argument(
+        "--filas", type=int, metavar="N",
+        help="Filas de la malla de esta corrida (obligatorio si cgra.json da un rango)",
+    )
+    parser.add_argument(
+        "--columnas", type=int, metavar="N",
+        help="Columnas de la malla de esta corrida (obligatorio si cgra.json da un rango)",
+    )
+    parser.add_argument(
         "--write-back", action="store_true",
         help="Guarda la memoria resultante (con los resultados) en el mismo memoria.bin",
     )
@@ -167,7 +179,7 @@ def main():
         help="Guarda el reporte de ciclos en otra ruta (por defecto <programa>/reporte_ciclos.txt)",
     )
     argumentos = parser.parse_args()
-    simulador = SimuladorCGRA(argumentos.cgra)
+    simulador = SimuladorCGRA(argumentos.cgra, filas=argumentos.filas, columnas=argumentos.columnas)
     if argumentos.programa == "todas":
         # Cada operación usa su propia memoria, programas y reporte.
         por_operacion = [opcion for opcion, valor in (

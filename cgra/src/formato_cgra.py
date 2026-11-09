@@ -109,8 +109,14 @@ class FormatoCGRA:
         return lineas
 
     @classmethod
-    def cargar(cls, ruta=RUTA_POR_DEFECTO):
-        """Lee y valida el JSON con el formato de la CGRA."""
+    def cargar(cls, ruta=RUTA_POR_DEFECTO, filas=None, columnas=None):
+        """Lee y valida el JSON con el formato de la CGRA.
+
+        ``filas`` y ``columnas`` del JSON pueden ser un número (una sola malla)
+        o un rango ``{"minimo": a, "maximo": b}``. Con un rango, el tamaño de la
+        corrida se pasa en ``filas``/``columnas`` y debe estar dentro de él; con
+        un número, si se pasa un tamaño debe ser ese mismo número.
+        """
         ruta = Path(ruta)
         try:
             datos = json.loads(ruta.read_text(encoding="utf-8"))
@@ -122,6 +128,11 @@ class FormatoCGRA:
         faltan = [campo for campo in cls.CAMPOS if campo not in datos]
         if faltan:
             raise ValueError(f"{ruta}: faltan los campos {', '.join(faltan)}")
+        try:
+            datos["filas"] = elegir_tamano("filas", datos["filas"], filas)
+            datos["columnas"] = elegir_tamano("columnas", datos["columnas"], columnas)
+        except ValueError as error:
+            raise ValueError(f"{ruta}: {error}") from None
         no_enteros = [campo for campo in cls.CAMPOS if type(datos[campo]) is not int]
         if no_enteros:
             raise ValueError(f"{ruta}: {', '.join(no_enteros)} deben ser números enteros")
@@ -155,24 +166,61 @@ class FormatoCGRA:
             raise ValueError(f"{ruta}: {error}") from None
 
 
-def malla_pequena(filas, columnas):
-    """Malla de una CGRA demasiado pequeña para la rotación E, V, C, o None si no lo es.
+def elegir_tamano(eje, declarado, pedido):
+    """Tamaño de un eje (``filas`` o ``columnas``) para esta corrida.
 
-    Con menos de 3 filas o columnas el cómputo es solo C (escalar y vectorial):
+    ``declarado`` es lo que dice el JSON: un número o un rango
+    ``{"minimo", "maximo"}``. ``pedido`` es el tamaño elegido por quien corre
+    la CGRA (None si no eligió). Devuelve el número a usar.
+    """
+    if pedido is not None and (type(pedido) is not int or pedido <= 0):
+        raise ValueError(f"el tamaño pedido de {eje} debe ser un entero mayor que cero")
+    if isinstance(declarado, dict):
+        minimo, maximo = declarado.get("minimo", 1), declarado.get("maximo")
+        if type(minimo) is not int or minimo <= 0 or (maximo is not None and (type(maximo) is not int or maximo < minimo)):
+            raise ValueError(f"el rango de '{eje}' debe tener 'minimo' >= 1 y 'maximo' >= 'minimo' (enteros)")
+        if pedido is None:
+            hasta = maximo if maximo is not None else "..."
+            raise ValueError(
+                f"'{eje}' es un rango [{minimo}, {hasta}]: falta elegir el tamaño (--{eje} en run_cgra.py)"
+            )
+        if pedido < minimo or (maximo is not None and pedido > maximo):
+            raise ValueError(f"{eje} = {pedido} está fuera del rango [{minimo}, {maximo}]")
+        return pedido
+    if pedido is not None and type(declarado) is int and pedido != declarado:
+        raise ValueError(f"este formato describe una sola malla con {eje} = {declarado}, no {pedido}")
+    return declarado
+
+
+def malla_pequena(filas, columnas):
+    """Malla de una CGRA que no admite la 'distribucion' de bordes, o None si la admite.
+
+    Las filas de cómputo rotan escalar (E) y vectorial (V). C (escalar y
+    vectorial a la vez) solo se usa cuando hay una sola fila de cómputo, porque
+    no alcanzan las filas para poner E y V:
 
         1x1                          G
-        Nx1                          M en la fila 0, C debajo
-        Nx2                          M C en cada fila
-        1 o 2 filas, 3+ columnas     M C ... C M
+        2x1                          M arriba, C debajo
+        Nx1, N >= 3                  M arriba, E, V, E... debajo
+        1x2                          M C
+        Nx2, N >= 2                  M E, M V, M E...
+        1 fila, 3+ columnas          M C ... C M
+        2+ filas, 3+ columnas        None: se usa la 'distribucion' (M E..E M, M V..V M...)
     """
+    def computo(cantidad_filas):
+        """Tipo de cómputo de cada fila: C si es la única; si no, E, V, E..."""
+        if cantidad_filas == 1:
+            return ["C"]
+        return ["E" if f % 2 == 0 else "V" for f in range(cantidad_filas)]
+
     if filas == 1 and columnas == 1:
         return [["G"]]
     if columnas == 1:
-        return [["M"]] + [["C"] for _ in range(filas - 1)]
+        return [["M"]] + [[letra] for letra in computo(filas - 1)]
     if columnas == 2:
-        return [["M", "C"] for _ in range(filas)]
-    if filas <= 2:
-        return [["M"] + ["C"] * (columnas - 2) + ["M"] for _ in range(filas)]
+        return [["M", letra] for letra in computo(filas)]
+    if filas == 1:
+        return [["M"] + ["C"] * (columnas - 2) + ["M"]]
     return None
 
 

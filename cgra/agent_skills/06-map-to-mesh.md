@@ -6,29 +6,28 @@ Assign the work units and the communication between PEs to a `filas x columnas`
 mesh whose PEs have **types** (see [Receive Inputs](01-receive-inputs.md)). Apply
 the [Mesh Compatibility Contract](mesh-compatibility.md) first. The geometric
 formulas below specialize the standard border layout; they must not be used
-for one/two-column or arbitrary explicit layouts. Always use the actual map.
+for single-row or arbitrary explicit layouts. Always use the actual map. The
+mesh has at least 3 columns (see the contract); one- and two-column meshes
+are not valid targets.
 
-## Local, Narrow and Explicit Layouts
+## Single-Row and Explicit Layouts
 
 Use `topologia`, eligible PE lists, servers, routes and `output_pe` from the
-manifest. For local G, set its server to itself and use no transfer. For Nx1,
-memory is at row 0, compute starts at row 1, and transfers go north/south.
-For Nx2, each row's west M serves its east C. With one or two rows and at
-least 3 columns, keep M at both ends and use only C in the interior. With
-3 columns (1x3 or 2x3), use both servers for each row's C. Wider special
-rows use the nearest border server and compatible relays through C, as in
-the existing shared-server rules. For other explicit maps, find compatible paths as specified by the
+manifest. With one row (and at least 3 columns), keep M at
+both ends and use only C in the interior; with 3 columns (1x3) use both
+servers for the C. Wider single rows use the nearest border server and
+compatible relays through C, as in the existing shared-server rules. For other explicit maps, find compatible paths as specified by the
 contract; do not invent a border memory PE or arithmetic at a memory-only PE.
 
-For at least 3 rows and 3 columns, retain the original normal-mesh mapping
-and E/V/C row rotation. Special C-only compute rows use separate scalar and
+For at least 2 rows and 3 columns, use the normal-mesh mapping with the E, V
+row rotation: scalar work on E rows, vector work on V rows, scalar tails on E.
+The C-only layout (a single row: 1xN) uses separate scalar and
 vector phases or a reserved subset of C for scalar work; do not assume an E
 row exists or schedule two instructions on a C in the same cycle.
 
 Use eligible-list tiling for these cases, including a single worker. Record
 every unit, owner, phase and round. With one worker, input/output transfers and
-computation repeat until the full problem is covered. A singleton G needs
-neither a compute-to-compute reduction nor an output transfer.
+computation repeat until the full problem is covered.
 
 ## Standard Border Mesh
 
@@ -165,8 +164,8 @@ recorded reduction plan and output PE; PE00 is preferred, not mandatory.
 ## Matmul and Convolucion: Scalar Border Output Tiles
 
 This rectangular formula applies when all listed compute positions are scalar
-eligible. With V rows, use the vector/scalar work lists below. For narrow or
-irregular maps, use the ordered eligible lists from the compatibility contract.
+eligible. With V rows, use the vector/scalar work lists below. For single-row
+or irregular maps, use the ordered eligible lists from the compatibility contract.
 
 One compute PE per output element, with the **compute block** sliding over the
 output in tiles of `tile_filas x tile_columnas` (the compute block of the
@@ -288,7 +287,7 @@ column hop into a V:   the V does not add: it receives into rT and, on its own
 ```
 
 This particular scalar-forwarding route ends in E/C and assumes no consecutive
-V rows, as in the standard rotation E,V,C. Arbitrary explicit maps must use
+V rows, as in the standard rotation E, V (row 0 is E, so the route ends in E). Arbitrary explicit maps must use
 the contract's scalar or vector reduction plan, including consecutive V nodes,
 rather than applying this specialization without checking capabilities.
 

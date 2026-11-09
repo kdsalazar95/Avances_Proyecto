@@ -73,48 +73,22 @@ load the program and reports the PE and cycle.
 7. For local accumulation, accumulate in the compute PE before starting the
    reduction across the mesh.
 
-## Local Execution: 1x1 G
+## Single-Row and Other Meshes
 
-Use the same bank names and bounds as every other layout. A scalar reduction
-starts with `MOV acc, 0.0`, repeats the following per input element, then ends
-with `ST result[0], acc`:
+The mesh has at least 3 columns (see the contract); one- and two-column
+meshes are not valid targets.
 
-```text
-LD rA, a[i]
-LD rB, b[i]
-ADD rC, rA, rB
-ST c[i], rC
-ADD acc, acc, rC
-```
-
-For each matmul/convolution output, clear acc, repeat local `LD rA`, `LD rB`,
-`MUL rC, rA, rB`, `ADD acc, acc, rC` for all accumulation steps, then store
-acc in that output position. Reuse the singleton for the next output. There
-are no sends, receives or self-neighbors. Vector local execution is optional
-when the real G instruction list and width support it; scalar execution is a
-valid baseline and handles all remainders.
-
-## Narrow Meshes
-
-- **Nx2:** each row has M west and C east. Use the single-server adjacent
-  tables with `to C = east` and `to M = west`. Scalar/vector phases on the
-  same C must not overlap. Combine reduction partials up the east column and
-  send the total west to the selected memory PE.
-- **Nx1, N >= 2:** M at row 0 serves C below. For the nearest C, translate
-  the adjacent tables to `to C = south`, `to M = north`. More distant C use
-  explicit vertical relays; serialize shared-server and relay conflicts.
-  Reduce upward through C to row 1, then send north to memory at row 0.
-- **1x3 or 2x3:** every row is M C M. Use the two-server tables already below.
-  Each C handles full vector blocks and a separately scheduled scalar tail.
-  1x3 has no inter-compute reduction; 2x3 combines the two C partials up the
-  middle column before storing at the selected memory PE.
-- **One or two rows, more than 3 columns:** keep M at both ends, with every
-  interior PE C. Use the existing adjacent/shared-server rules and record
-  horizontal relays. Reduce each compute row toward its westmost C and, for
-  two rows, combine upward. Scalar and vector work on a shared C uses separate
-  phases, unless different C PEs have been reserved for concurrent work.
-- **At least 3 rows and 3 columns:** preserve the original normal-mesh
-  schedules and E/V/C row rotation; the exceptions above do not replace them.
+- **1x3:** M C M. Use the two-server tables already below. The C handles full
+  vector blocks and a separately scheduled scalar tail; there is no
+  inter-compute reduction.
+- **One row, more than 3 columns:** keep M at both ends, with every interior
+  PE C. Use the existing adjacent/shared-server rules and record horizontal
+  relays. Reduce the row toward its westmost C. Scalar and vector work on a
+  shared C uses separate phases, unless different C PEs have been reserved
+  for concurrent work.
+- **At least 2 rows and 3 columns:** the normal-mesh schedules with the E, V
+  row rotation (2x3 is M E M / M V M, using the two-server tables with the
+  scalar table on the E row and the vector table on the V row).
 - **Other explicit maps:** use the recorded paths/root/output PE. Neither
   orientation nor endpoint may be inferred solely from a border coordinate.
 
@@ -315,8 +289,9 @@ until the other one ends.
 
 With `3` columns each compute PE has a server on each side (skill 06): the west
 one (`O`) sends the first operand, and the east one (`E`) sends the second and
-stores the results. `C` is the compute PE. Every table was checked in the
-simulator.
+stores the results. `C` is the compute PE: the `C` of a one-row mesh (1x3),
+or the `E` (scalar tables) or `V` (vector tables) of each row from 2x3 on.
+Every table was checked in the simulator.
 
 ### Reduccion, scalar: 5-cycle step
 
