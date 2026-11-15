@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 _raiz_dg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,7 +42,7 @@ with open(RUTA_POR_DEFECTO, encoding="utf-8") as _archivo:
     CGRA_JSON = json.load(_archivo)
 TIPOS = CGRA_JSON["tipos_pe"]
 CGRA_3X3 = dict(CGRA_JSON, filas=3, columnas=3)  # cgra.json da rangos; esta es la malla 3x3
-CGRA_3X3_C = dict(CGRA_3X3, malla=["M E M", "M V M", "M C M"])  # con un PE C (la 3x3 de cgra.json es la referencia)
+CGRA_3X3_OTRA = dict(CGRA_3X3, malla=["M E M", "M V M", "M V M"])  # distinta de la referencia M E M / M V M / M E M
 
 
 def malla(*filas, tipos=TIPOS):
@@ -203,7 +204,7 @@ class TestMapeoDijkstra(unittest.TestCase):
 
     def test_1_determinismo(self):
         """Mapear dos veces la misma entrada debe dar exactamente el mismo resultado."""
-        malla_3x3 = malla("M E M", "M V M", "M C M")
+        malla_3x3 = malla("M E M", "M V M", "M E M")
         primero = mapear(ejemplo_a_mano(), malla_3x3, self.compat)
         segundo = mapear(ejemplo_a_mano(), malla_3x3, self.compat)
         self.assertEqual((primero.ubicacion, primero.programa, primero.metricas),
@@ -211,7 +212,7 @@ class TestMapeoDijkstra(unittest.TestCase):
 
     def test_2_ejemplo_a_mano_3x3(self):
         """(a[0] + b[0]) * 2.0 en la malla 3x3 de cgra.json: PE y ciclo de cada operación."""
-        resultado = mapear(ejemplo_a_mano(), malla("M E M", "M V M", "M C M"), self.compat)
+        resultado = mapear(ejemplo_a_mano(), malla("M E M", "M V M", "M E M"), self.compat)
         self.assertTrue(resultado.valido, resultado.motivo)
         # Los loads salen lo más tarde posible: b de PE02 en el ciclo 0 (llega en el 1 y
         # espera), a de PE00 en el 1 (llega en el 2). El ADD va en el E (PE01) en el ciclo 3,
@@ -248,24 +249,24 @@ class TestMapeoDijkstra(unittest.TestCase):
 
     def test_5_casos_invalidos(self):
         """Sin PE de memoria, operación sin tabla, grafo con ciclos o malla 1x1 de solo M: inválido con motivo."""
-        sin_memoria = mapear(ejemplo_a_mano(), malla("E C E", "C E C"), self.compat)
+        sin_memoria = mapear(ejemplo_a_mano(), malla("E V E", "V E V"), self.compat)
         self.assertFalse(sin_memoria.valido)
         self.assertIn("ejecuta LD", sin_memoria.motivo)
 
         sin_tabla = GrafoDatos.desde_dict({"operaciones": [{"id": 0, "op": "load", "banco": "a", "indice": 0},
                                                            {"id": 1, "op": "frem", "entradas": [0, 0]}]})
-        resultado = mapear(sin_tabla, malla("M C M"), self.compat)
+        resultado = mapear(sin_tabla, malla("M E M"), self.compat)
         self.assertFalse(resultado.valido)
         self.assertIn("'frem' (#1) no tiene entrada en la tabla", resultado.motivo)
 
         con_ciclo = GrafoDatos.desde_dict({"operaciones": [{"id": 0, "op": "fadd", "entradas": [1, 1]},
                                                            {"id": 1, "op": "fadd", "entradas": [0, 0]}]})
-        resultado = mapear(con_ciclo, malla("M C M"), self.compat)
+        resultado = mapear(con_ciclo, malla("M E M"), self.compat)
         self.assertFalse(resultado.valido)
         self.assertIn("ciclos", resultado.motivo)
 
         datos = dict(CGRA_JSON)
-        # Malla explícita: el cgra.json del simulador adapta la 1x1 a G (adaptar_mallas_pequenas).
+        # Malla explícita: sin ella, adaptar_mallas_pequenas rechaza la 1x1 al cargar.
         datos.update(filas=1, columnas=1, malla=["M"])
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as archivo:
             json.dump(datos, archivo)
@@ -290,7 +291,7 @@ class TestVerificador(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.compat = Compatibilidad.cargar()
-        cls.malla = malla("M E M", "M V M", "M C M")
+        cls.malla = malla("M E M", "M V M", "M E M")
         cls.grafo = ejemplo_a_mano()
 
     def mapeo(self):
@@ -441,11 +442,11 @@ class TestSimuladorDijkstra(_Simular, _ConOperaciones):
                 self.assertIgualAlC(operacion, self.memoria_simulada(operacion, self.formato))
 
     def test_3_otras_mallas(self):
-        """Mallas de otro tamaño y mapas explícitos con G, M, E, V y C también deben dar la memoria correcta."""
+        """Mallas de otro tamaño y mapas explícitos con M, E y V también deben dar la memoria correcta."""
         mallas = [
             (1, 3, [["M", "E", "M"]]),
-            (2, 2, [["G", "V"], ["E", "M"]]),
-            (4, 4, [["M", "E", "C", "M"], ["G", "V", "V", "M"], ["M", "C", "E", "G"], ["V", "M", "C", "E"]]),
+            (2, 2, [["M", "E"], ["V", "M"]]),
+            (4, 4, [["M", "E", "V", "M"], ["M", "V", "V", "M"], ["M", "E", "E", "M"], ["V", "M", "E", "E"]]),
         ]
         for filas, columnas, mapa in mallas:
             formato = FormatoCGRA(filas, columnas, 4096, TIPOS, mapa, 4)
@@ -503,12 +504,12 @@ class TestEvaluador(_ConOperaciones):
         return sum(por_op) / len(por_op)
 
     def test_1_costos_de_cgra_json(self):
-        """En la 3x3 M E M / M V M / M C M: C_A = 6 M x 12 + E 1 + V 2 + C 3 = 78, C_L = ciclos·(1 + NOPs/(ciclos·PEs))
+        """En la 3x3 M E M / M V M / M V M: C_A = 6 M x 12 + E 1 + V 2 + V 2 = 77, C_L = ciclos·(1 + NOPs/(ciclos·PEs))
         por operación, C_R = 0 y C = promedio de C_A/C_A_ref + C_L/C_L_ref + C_R con los normalizadores del RL."""
-        evaluacion = self.evaluador.evaluar(CGRA_3X3_C)
+        evaluacion = self.evaluador.evaluar(CGRA_3X3_OTRA)
         self.assertEqual(evaluacion.estado, "correcta", evaluacion.motivo)
-        self.assertEqual(evaluacion.area, 78)
-        self.assertEqual(evaluacion.metricas["capacidades"], {"MS": 6, "MV": 6, "CS": 2, "CV": 2})
+        self.assertEqual(evaluacion.area, 77)
+        self.assertEqual(evaluacion.metricas["capacidades"], {"MS": 6, "MV": 6, "CS": 1, "CV": 2})
         for e in evaluacion.operaciones.values():
             self.assertAlmostEqual(e.C_L, e.ciclos * (1 + e.nops / (e.ciclos * 9)))
             self.assertEqual(e.C_R, 0)
@@ -540,15 +541,16 @@ class TestEvaluador(_ConOperaciones):
             evaluador.evaluar(CGRA_3X3)
 
     def test_5_accion_invalida(self):
-        """Fuera de rango, menos de 3 columnas, M en el interior, G o un tipo sin definir: accion_invalida,
+        """Fuera de rango, menos de 3 columnas, M en el interior, G (ya no existe) o un tipo sin definir: accion_invalida,
         costo P_fallo, sin mapear ni simular."""
         casos = {
             "filas = 40 fuera del rango permitido [1, 32]": dict(CGRA_JSON, filas=40, columnas=3),
-            "se necesitan al menos 3 columnas": dict(CGRA_JSON, filas=1, columnas=1),
-            "PE(1,1) es M y accede a memoria": dict(CGRA_3X3, malla=["M E M", "M M M", "M C M"]),
-            "PE(0,1) es G y accede a memoria": dict(CGRA_3X3, malla=["M G M", "M V M", "M C M"]),
-            "PE(0,0) es E: los bordes": dict(CGRA_3X3, malla=["E E M", "M V M", "M C M"]),
-            "'X' no está definido": dict(CGRA_3X3, malla=["M X M", "M V M", "M C M"]),
+            "la malla 1x1 no es válida": dict(CGRA_JSON, filas=1, columnas=1),
+            "se necesitan al menos 3 columnas": dict(CGRA_JSON, filas=3, columnas=2, malla=["M E", "M V", "M E"]),
+            "PE(1,1) es M y accede a memoria": dict(CGRA_3X3, malla=["M E M", "M M M", "M E M"]),
+            "'G' no está definido": dict(CGRA_3X3, malla=["M G M", "M V M", "M E M"]),
+            "PE(0,0) es E: los bordes": dict(CGRA_3X3, malla=["E E M", "M V M", "M E M"]),
+            "'X' no está definido": dict(CGRA_3X3, malla=["M X M", "M V M", "M E M"]),
         }
         with mock.patch.object(modulo_evaluador, "evaluar_configuracion", side_effect=AssertionError):
             for texto, configuracion in casos.items():
@@ -560,8 +562,9 @@ class TestEvaluador(_ConOperaciones):
 
     def test_6_fallo_evaluador(self):
         """Si Dijkstra no puede mapear, o sus PE*.txt no pasan las reglas de E03, es fallo_evaluador."""
-        sin_add = dict(CGRA_3X3, filas=1, malla=["M V M"])
-        evaluacion = self.evaluador.evaluar(sin_add)
+        sin_mapeo = SimpleNamespace(valido=False, motivo="no se pudo rutear (simulado)")
+        with mock.patch.object(modulo_evaluador, "evaluar_configuracion", return_value=sin_mapeo):
+            evaluacion = Evaluador([self.pequena], carpeta_programas=self.programas).evaluar(CGRA_3X3)
         self.assertEqual(evaluacion.estado, "fallo_evaluador")
         self.assertEqual(evaluacion.costo, self.costos.p_fallo)
         error = {"skill": "E03", "regla": "salida_sin_cubrir", "detalle": "1 de 1 posiciones de 'x'"}
@@ -629,11 +632,11 @@ class TestEvaluador(_ConOperaciones):
         costos.ruta_normalizadores = None
         costos.K = {"K_A": 3, "K_L": 2, "K_R": 1}
         evaluador = Evaluador(self.nombres, carpeta_programas=self.programas, costos=costos, normalizadores=None)
-        evaluacion = evaluador.evaluar(CGRA_3X3_C)
+        evaluacion = evaluador.evaluar(CGRA_3X3_OTRA)
         norm = evaluador.normalizadores()
         for op, e in evaluacion.operaciones.items():
             self.assertEqual(e.C_L, e.ciclos)
-        por_op = [3 * 78 / norm["C_A_ref"] + 2 * e.C_L / norm["operaciones"][op]["C_L_ref"]
+        por_op = [3 * 77 / norm["C_A_ref"] + 2 * e.C_L / norm["operaciones"][op]["C_L_ref"]
                   for op, e in evaluacion.operaciones.items()]
         self.assertAlmostEqual(evaluacion.costo, sum(por_op) / len(por_op))
 

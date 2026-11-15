@@ -75,6 +75,7 @@ class EvaluacionOperacion:
     errores: list = field(default_factory=list)
     C_L_norm: float = None
     costo: float = None
+    nops_por_pe: dict = None  # PE -> NOPs, de la tabla "Instrucciones por PE" de reporte_ciclos.txt
 
     @property
     def valido(self):
@@ -115,7 +116,7 @@ class Evaluacion:
         return asdict(self)
 
 
-# -- piezas compartidas con la etapa evaluar_cgra.py -------------------------------------
+# -- de la corrida del simulador a la Evaluacion -------------------------------------
 def medir_reporte(operacion, datos, grafo, regiones, costos, ruta_memoria=None):
     """``EvaluacionOperacion`` desde los datos de una corrida del simulador (``simulacion.leer_corrida``).
 
@@ -145,7 +146,8 @@ def medir_reporte(operacion, datos, grafo, regiones, costos, ruta_memoria=None):
     validacion = {k: v[k] for k in ("aprobada", "elementos_fallidos", "total_elementos", "primeros_fallos")}
     return EvaluacionOperacion(
         operacion, estado, "; ".join(e["detalle"] for e in errores), datos.get("modo"), ciclos, nops, slots,
-        fraccion_nops(ciclos, nops, n_pes), costos.latencia(ciclos, nops, n_pes), v["C_R"], validacion, errores)
+        fraccion_nops(ciclos, nops, n_pes), costos.latencia(ciclos, nops, n_pes), v["C_R"], validacion, errores,
+        nops_por_pe=datos.get("nops_por_pe"))
 
 
 def agregar(formato, operaciones, costos, normalizadores, motivo=""):

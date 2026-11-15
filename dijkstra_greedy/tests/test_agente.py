@@ -1,5 +1,5 @@
-"""Pruebas del agente Greedy (dijkstra_greedy/dijkstra/agente.py): cadena de mejoras
-determinística de configuraciones de la CGRA, con un evaluador falso y con el real."""
+"""Pruebas del agente Greedy (dijkstra_greedy/dijkstra/agente.py): camino sin ciclos por los PEs
+de una malla, siempre al vecino sin visitar de menor peso w_tipo · (1 + NOPs/ciclos)."""
 
 import json
 import os
@@ -14,263 +14,222 @@ sys.path.insert(0, os.path.join(os.path.dirname(_raiz_dg), "cgra", "src"))  # si
 sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (dijkstra_greedy/)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dijkstra.agente import Agente, EvaluadorParalelo, Parametros, Registro
-from dijkstra.compilar import FUENTE, ErrorCompilacion, preparar
-from dijkstra.evaluador import RUTA_COSTOS, Evaluacion, Evaluador
+from dijkstra.agente import Agente, Parametros, medir_en_paralelo
+from dijkstra.compilar import FUENTE, ErrorCompilacion, grafos, preparar
+from dijkstra.evaluador import RUTA_COSTOS, Evaluacion, EvaluacionOperacion, Evaluador
 from formato_cgra import RUTA_POR_DEFECTO
+from malla import Malla
 from run_cgra import SimuladorCGRA
 from test_dijkstra import _ConOperaciones
 
 with open(RUTA_POR_DEFECTO, encoding="utf-8") as _archivo:
     BASE = json.load(_archivo)
 
-AREA = {"G": 15, "M": 12, "E": 1, "V": 2, "C": 3}
-POTENCIA = {"G": 3, "E": 1, "V": 2, "C": 3}
-MALLA_3X3 = (("M", "E", "M"), ("M", "V", "M"), ("M", "C", "M"))
+W = {"M": 12, "E": 1, "V": 2}  # w_tipo con los pesos w1-w4 de costos.json
+MALLA_3X3 = (("M", "E", "M"), ("M", "V", "M"), ("M", "E", "M"))
 
 
-def medir_falso(k_area=1.0, k_latencia=1.0, invalida=None, llamadas=None):
-    """Evaluador falso y rápido: área con los pesos de costos.json y una latencia que
-    baja con la potencia de cómputo y con la cantidad de PEs de memoria."""
-    def medir(configuracion):
-        if llamadas is not None:
-            llamadas.append(configuracion)
-        letras = [t for fila in configuracion["malla"] for t in fila.split()]
-        area = sum(AREA[t] for t in letras)
-        latencia = 1000 / sum(POTENCIA.get(t, 0) for t in letras) + 200 / sum(t in "MG" for t in letras)
-        valida = not (invalida and invalida(configuracion["malla"]))
-        costo = k_area * area + k_latencia * latencia if valida else 1e6
-        return Evaluacion(configuracion["malla"], "correcta" if valida else "incorrecta", costo,
-                          {"C_A": area, "C_L_norm": latencia, "C_R": 0.0}, "" if valida else "inválida (falso)")
-    return medir
+def evaluacion_falsa(malla, nops_por_op, ciclos=10, estado="correcta"):
+    """Una Evaluacion como la del evaluador, con ``nops_por_pe`` por operación."""
+    operaciones = {op: EvaluacionOperacion(op, estado, ciclos=ciclos, nops=sum((n or {}).values()), nops_por_pe=n,
+                                           C_R=0.0)
+                   for op, n in nops_por_op.items()}
+    normalizadores = {"C_A_ref": 76, "operaciones": {op: {"C_A_ref": 76, "C_L_ref": 100.0} for op in nops_por_op}}
+    return Evaluacion([" ".join(f) for f in malla], estado, 1.0, {}, "", operaciones, normalizadores=normalizadores)
 
 
-def cotas_falsas(k_area=1.0):
-    """Las cotas que corresponden a medir_falso: C ≥ k_area · área, y el área
-    mínima de n PEs es un M (12, escribe en memoria) y n - 1 E (1)."""
-    def cota(configuracion):
-        return k_area * sum(AREA[t] for fila in configuracion["malla"] for t in fila.split())
-
-    def cota_tamano(tipos_pe, pes):
-        return k_area * (12 + (pes - 1))
-    return cota, cota_tamano
+def nops_iguales(malla, valor):
+    filas, columnas = len(malla), len(malla[0])
+    return {Malla(filas, columnas).id_de(f, c): valor for f in range(filas) for c in range(columnas)}
 
 
 def parametros(**cambios):
-    datos = dict(max_rondas=10, lado_maximo=4, iniciales=[[3, 3]], interior_alternativo="C",
-                 procesos=1, barrido=False, max_evaluaciones=None, paciencia=None)
+    datos = dict(malla=[3, 3], inicio=[0, 0], epsilon=0.0, semilla=0, procesos=1)  # epsilon 0: Greedy puro
     datos.update(cambios)
     return Parametros(**datos)
 
 
-def registro(nombre, costo, valida=True):
-    """Un registro evaluado con ese costo, para probar la cadena a mano."""
-    return Registro(((nombre,),), nombre, 0, Evaluacion([], "correcta" if valida else "incorrecta", costo,
-                                                        {"C_A": 1}))
-
-
 class TestAgenteGreedy(unittest.TestCase):
-    """El agente explora vecinas en orden fijo y guarda la cadena de mejoras."""
+    """Greedy camina por los PEs: siempre al vecino sin visitar de menor peso, sin repetir ninguno."""
 
-    def test_1_determinismo(self):
-        """Dos corridas completas deben dar la misma cadena y el mismo historial."""
-        corridas = []
-        for _ in range(2):
-            agente = Agente(medir_falso(), BASE, parametros())
-            cadena = agente.buscar()
-            corridas.append(([r.clave for r in cadena], [(r.clave, r.costo) for r in agente.historial]))
-        self.assertEqual(corridas[0], corridas[1])
+    def test_1_peso_de_cada_pe(self):
+        """Peso = w_tipo · (1 + NOPs/ciclos), con NOPs y ciclos sumados sobre las operaciones."""
+        agente = Agente(None, BASE, parametros())
+        nops = {"op1": nops_iguales(MALLA_3X3, 2), "op2": nops_iguales(MALLA_3X3, 3)}
+        nops["op1"]["PE11"] = 10  # el V de en medio está en NOP los 10 ciclos de op1
+        pesos = agente.calcular_pesos(evaluacion_falsa(MALLA_3X3, nops, ciclos=10))
+        self.assertEqual(pesos["PE00"].w_tipo, 12)
+        self.assertEqual(pesos["PE00"].ciclos, 20)
+        self.assertAlmostEqual(pesos["PE00"].peso, 12 * (1 + 5 / 20))
+        self.assertAlmostEqual(pesos["PE01"].peso, 1 * (1 + 5 / 20))
+        self.assertAlmostEqual(pesos["PE11"].peso, 2 * (1 + 13 / 20))
+        self.assertEqual({p.tipo for p in pesos.values()}, {"M", "E", "V"})
 
-    def test_2_validacion_previa(self):
-        """Lo que la validación previa del RL rechaza se descarta sin llamar al evaluador."""
+    def test_2_sin_reporte_por_pe_falla(self):
+        """Sin la tabla de NOPs por PE del reporte de ciclos no hay pesos."""
+        agente = Agente(None, BASE, parametros())
+        evaluacion = evaluacion_falsa(MALLA_3X3, {"op1": None})
+        with self.assertRaisesRegex(ValueError, "sin reporte de ciclos por PE"):
+            agente.calcular_pesos(evaluacion)
+
+    def test_3_aristas_son_los_vecinos(self):
+        """Cada PE se conecta con sus vecinos norte, sur, este y oeste dentro de la malla."""
+        self.assertEqual(sorted(Agente.vecinos("PE00", 3, 3)), ["PE01", "PE10"])
+        self.assertEqual(sorted(Agente.vecinos("PE01", 3, 3)), ["PE00", "PE02", "PE11"])
+        self.assertEqual(sorted(Agente.vecinos("PE11", 3, 3)), ["PE01", "PE10", "PE12", "PE21"])
+        self.assertEqual(sorted(Agente.vecinos("PE0000", 12, 12)), ["PE0001", "PE0100"])
+
+    def test_4_camino_greedy_sin_ciclos(self):
+        """Empieza en PE00; cada paso va a un vecino sin visitar y de menor peso entre los libres;
+        ningún PE se repite y termina cuando el último no tiene vecinos sin visitar."""
+        malla = Agente(None, BASE, parametros(malla=[4, 5])).malla()
+        nops = {"op": {pe: (i * 7) % 5 for i, pe in enumerate(Malla(4, 5).ids())}}
+        agente = Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(malla=[4, 5]))
+        camino = agente.buscar()
+        pesos = agente.pesos
+        self.assertEqual(camino[0], "PE00")
+        self.assertEqual(len(camino), len(set(camino)))
+        for i, (actual, siguiente) in enumerate(zip(camino, camino[1:])):
+            libres = [v for v in Agente.vecinos(actual, 4, 5) if v not in camino[:i + 1]]
+            self.assertIn(siguiente, libres)
+            self.assertEqual(pesos[siguiente].peso, min(pesos[v].peso for v in libres))
+        self.assertEqual([v for v in Agente.vecinos(camino[-1], 4, 5) if v not in camino], [])
+
+    def test_5_empates_en_orden_fila_por_fila(self):
+        """Con todos los pesos iguales por tipo, el empate se resuelve por el primero fila por fila."""
+        agente = Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 0)}), BASE,
+                        parametros())
+        camino = agente.buscar()
+        # PE00 (M) → PE01 (E, 1) → PE11 (V, 2; PE02 es M, 12) → PE10 (M) ... sin repetir.
+        self.assertEqual(camino[:3], ["PE00", "PE01", "PE11"])
+        self.assertEqual(camino, Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 0)}),
+                                        BASE, parametros()).buscar())
+
+    def test_6_inicio_configurable(self):
+        """El camino empieza en el PE de ``inicio``; fuera de la malla es un error."""
+        evaluacion = evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 0)})
+        self.assertEqual(Agente(lambda c: evaluacion, BASE, parametros(inicio=[2, 2])).buscar()[0], "PE22")
+        with self.assertRaisesRegex(ValueError, "fuera de la malla"):
+            Agente(lambda c: evaluacion, BASE, parametros(inicio=[3, 0])).buscar()
+
+    def test_7_una_sola_simulacion(self):
+        """La malla se evalúa una sola vez, con la configuración de cgra.json en ese tamaño."""
         llamadas = []
-        agente = Agente(medir_falso(llamadas=llamadas), BASE, parametros(lado_maximo=4))
-        sin_memoria = (("E", "C", "E"),)
-        sin_computo = (("M", "M", "M"),)
-        dos_columnas = (("M", "M"), ("M", "M"))
-        con_g = (("M", "G", "M"),)
-        grande = tuple(tuple("MEEEM") for _ in range(5))
-        registros = agente.evaluar([sin_memoria, sin_computo, dos_columnas, con_g, grande], 0)
-        self.assertEqual(llamadas, [])
-        self.assertEqual([r.motivo for r in registros], [
-            "la malla no tiene ningún PE de memoria", "la malla no tiene ningún PE de cómputo",
-            "columnas = 2 fuera del rango permitido [3, 32]",
-            "PE(0,1) es G y accede a memoria: la memoria solo puede ir en los bordes oeste/este; "
-            "el interior es de cómputo (E, V o C)",
-            "tamaño 5x5 fuera de los límites (filas 1..4, columnas 1..4)",
-        ])
-        self.assertTrue(all(r.costo == float("inf") for r in registros))
-        self.assertIsNone(agente.motivo_invalida((("M", "C", "M"),)))
 
-    def test_3_vecinas(self):
-        """Las vecinas deben ser únicas, sin la propia, en orden estable y solo con tipos de cgra.json."""
-        agente = Agente(medir_falso(), BASE, parametros())
-        vecinas = agente.vecinas(MALLA_3X3)
-        self.assertEqual(vecinas, agente.vecinas(MALLA_3X3))
-        self.assertEqual(len(vecinas), len(set(vecinas)))
-        self.assertNotIn(MALLA_3X3, vecinas)
-        self.assertTrue({t for v in vecinas for fila in v for t in fila} <= set(BASE["tipos_pe"]))
-        # Primero los movimientos por fila (la fila 0 pasa de E a V; a E sería ella misma).
-        self.assertEqual(vecinas[0], (("M", "V", "M"), ("M", "V", "M"), ("M", "C", "M")))
-        # Agregar una fila copia la interior más cercana al borde sur, antes de la última.
-        self.assertIn((("M", "E", "M"), ("M", "V", "M"), ("M", "V", "M"), ("M", "C", "M")), vecinas)
-        # Quitar la columna del medio, y mover el M de (0, 0) al siguiente lugar del perímetro.
-        self.assertIn((("M", "M"), ("M", "M"), ("M", "M")), vecinas)
-        self.assertIn((("E", "M", "M"), ("M", "V", "M"), ("M", "C", "M")), vecinas)
+        def medir(configuracion):
+            llamadas.append(configuracion)
+            return evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 1)})
 
-    def test_4_comparar_con_la_ultima(self):
-        """La de C mayor se descarta, la de C menor o igual entra y las siguientes se comparan con ella."""
-        agente = Agente(medir_falso(), BASE, parametros())
-        a, peor, b, empate, c = registro("a", 5), registro("peor", 6), registro("b", 4), registro("empate", 4), \
-            registro("c", 3)
-        self.assertEqual(agente.actualizar_cadena([a, peor, b]), [a, b])
-        self.assertEqual(agente.actualizar_cadena([registro("entre", 4.5), empate, c, registro("d", 3.5)]),
-                         [empate, c])
-        self.assertEqual([r.clave for r in agente.cadena], ["a", "b", "empate", "c"])
-        self.assertEqual(agente.actualizar_cadena([registro("invalida", 1, valida=False)]), [])
-
-    def test_5_la_cadena_baja_y_termina_en_la_mejor(self):
-        """Cada una de la cadena cuesta menos o igual que la anterior, y la última es la de menor C evaluada."""
-        agente = Agente(medir_falso(), BASE, parametros())
-        cadena = agente.buscar()
-        self.assertGreater(len(cadena), 1)
-        costos = [r.costo for r in cadena]
-        self.assertEqual(costos, sorted(costos, reverse=True))
-        self.assertEqual(cadena[-1].costo, min(r.costo for r in agente.historial if r.valida))
-
-    def test_6_sensibilidad_a_k(self):
-        """Priorizando área la mejor debe tener menos área; priorizando latencia, menos latencia."""
-        por_area = Agente(medir_falso(k_area=100), BASE, parametros()).buscar()[-1]
-        por_latencia = Agente(medir_falso(k_latencia=100), BASE, parametros()).buscar()[-1]
-        self.assertLess(por_area.area, por_latencia.area)
-        self.assertLess(por_latencia.evaluacion.latencia, por_area.evaluacion.latencia)
-
-    def test_7_penalizacion(self):
-        """Ninguna configuración inválida debe entrar a la cadena."""
-        con_v = lambda malla: any("V" in fila for fila in malla)
-        agente = Agente(medir_falso(invalida=con_v), BASE, parametros())
-        cadena = agente.buscar()
-        self.assertTrue(any(r.evaluacion is not None and not r.valida for r in agente.historial))
-        self.assertTrue(cadena)
-        self.assertTrue(all(r.valida for r in cadena))
-
-    def test_8_convergencia(self):
-        """La cadena solo crece: cada ronda conserva la anterior y su última nunca cuesta más."""
-        agente = Agente(medir_falso(), BASE, parametros())
+        agente = Agente(medir, BASE, parametros())
         agente.buscar()
-        rondas = agente.cadena_por_ronda
-        self.assertGreater(len(rondas), 1)
-        for anterior, nueva in zip(rondas, rondas[1:]):
-            self.assertEqual(nueva[:len(anterior)], anterior)
-            self.assertLessEqual(nueva[-1].costo, anterior[-1].costo)
+        self.assertEqual(len(llamadas), 1)
+        self.assertEqual(llamadas[0]["malla"], ["M E M", "M V M", "M E M"])
+        self.assertNotIn("distribucion", llamadas[0])
+        self.assertEqual(llamadas[0]["tipos_pe"], BASE["tipos_pe"])
 
-    def test_9_configuracion_para_el_evaluador(self):
-        """La configuración que recibe el evaluador es cgra.json con tamaño fijo y malla explícita."""
-        configuracion = Agente(medir_falso(), BASE, parametros()).configuracion(MALLA_3X3)
-        self.assertEqual((configuracion["filas"], configuracion["columnas"]), (3, 3))
-        self.assertEqual(configuracion["malla"], ["M E M", "M V M", "M C M"])
-        self.assertNotIn("distribucion", configuracion)
-        self.assertEqual(configuracion["tipos_pe"], BASE["tipos_pe"])
+    def test_8_malla_incorrecta_no_camina(self):
+        """Si la simulación de la malla no es correcta, no hay pesos ni camino."""
+        agente = Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 0)},
+                                                   estado="incorrecta"), BASE, parametros())
+        with self.assertRaisesRegex(ValueError, "no es correcta"):
+            agente.buscar()
 
-    def test_10_barrido_de_todos_los_tamanos(self):
-        """Sin cotas, la ronda 0 revisa todos los tamaños de los límites, de menos a más PEs."""
-        agente = Agente(medir_falso(), BASE, parametros(barrido=True, max_rondas=0))
-        agente.buscar()
-        self.assertEqual(agente.barrido["revisados"], 16)
-        self.assertEqual(agente.barrido["sin_revisar"], 0)
-        pes = [len(r.malla) * len(r.malla[0]) for r in agente.historial]
-        self.assertEqual(pes, sorted(pes))
-        self.assertEqual({(len(r.malla), len(r.malla[0])) for r in agente.historial},
-                         {(f, c) for f in range(1, 5) for c in range(1, 5)})
+    def test_9_resultado(self):
+        """El resultado son los PEs del camino (no tienen que formar un rectángulo), con su peso total,
+        cuántos de cada tipo y el mapa con '.' en los que quedan fuera."""
+        agente = Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 0)}), BASE,
+                        parametros())
+        camino = agente.buscar()
+        r = agente.resultado()
+        self.assertEqual([p["pe"] for p in r["camino"]], camino)
+        self.assertEqual(r["pes"], len(camino))
+        self.assertAlmostEqual(r["peso_total"], sum(agente.pesos[pe].peso for pe in camino))
+        self.assertEqual(sum(r["por_tipo"].values()), len(camino))
+        letras = [t for fila in r["mapa"] for t in fila.split()]
+        self.assertEqual(sum(t != "." for t in letras), len(camino))
+        self.assertEqual(r["inicio"], "PE00")
 
-    def test_12_empieza_en_la_referencia(self):
-        """Con iniciales = 'referencia', la ronda 0 es M E M / M V M / M E M y es la primera de la cadena."""
-        agente = Agente(medir_falso(), BASE, parametros(iniciales="referencia", max_rondas=1))
-        cadena = agente.buscar()
-        self.assertEqual(agente.historial[0].malla, (("M", "E", "M"), ("M", "V", "M"), ("M", "E", "M")))
-        self.assertEqual(cadena[0].malla, agente.historial[0].malla)
 
-    def test_13_presupuesto_de_evaluaciones(self):
-        """max_evaluaciones cuenta las evaluaciones sin la referencia, como max_iteraciones del RL."""
+    def test_10_valuacion_del_camino(self):
+        """El camino se valúa con la función de costo sin volver a simular: C_A = Σ w_tipo del camino,
+        C_L = ciclos·(1 + NOPs del camino/(ciclos·PEs del camino)), C = K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R."""
+        nops = nops_iguales(MALLA_3X3, 4)
         llamadas = []
-        agente = Agente(medir_falso(llamadas=llamadas), BASE,
-                        parametros(iniciales="referencia", max_evaluaciones=5))
-        agente.buscar()
-        evaluadas = [r for r in agente.historial if r.evaluacion is not None]
-        self.assertEqual(len(evaluadas), 6)
-        self.assertEqual(len(llamadas), 6)
-        self.assertEqual(agente.terminada, "max_evaluaciones")
+        agente = Agente(lambda c: llamadas.append(c) or evaluacion_falsa(MALLA_3X3, {"op": nops}, ciclos=10),
+                        BASE, parametros())
+        camino = agente.buscar()
+        v = agente.valuar_camino()
+        self.assertEqual(len(llamadas), 1)  # la única simulación es la de la malla
+        c_a = sum(W[agente.pesos[pe].tipo] for pe in camino)
+        c_l = 10 * (1 + 4 * len(camino) / (10 * len(camino)))
+        self.assertEqual(v["C_A"], c_a)
+        self.assertAlmostEqual(v["por_operacion"]["op"]["C_L"], c_l)
+        self.assertAlmostEqual(v["C"], c_a / 76 + c_l / 100.0 + 0.0)
+        self.assertEqual(agente.resultado()["valuacion"], v)
 
-    def test_14_paciencia(self):
-        """Termina tras ``paciencia`` evaluaciones seguidas que no bajan el mínimo (más que la tolerancia)."""
-        referencia = ["M E M", "M V M", "M E M"]
 
-        def peor_que_la_referencia(configuracion):
-            costo = 1.0 if configuracion["malla"] == referencia else 2.0
-            return Evaluacion(configuracion["malla"], "correcta", costo, {"C_A": 1})
+    def test_11_epsilon_greedy(self):
+        """Con epsilon, cada paso explora (un vecino libre al azar) o explota (el de menor peso); el camino
+        sigue sin repetir PEs, y la misma semilla da el mismo camino."""
+        malla = Agente(None, BASE, parametros(malla=[5, 6])).malla()
+        nops = {"op": {pe: (i * 7) % 5 for i, pe in enumerate(Malla(5, 6).ids())}}
 
-        agente = Agente(peor_que_la_referencia, BASE, parametros(iniciales="referencia", paciencia=3))
-        agente.buscar()
-        self.assertEqual(agente.terminada, "paciencia")
-        self.assertEqual(sum(r.evaluacion is not None for r in agente.historial), 1 + 3)
+        def correr(**cambios):
+            agente = Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(malla=[5, 6], **cambios))
+            return agente, agente.buscar()
 
-    def test_15_referencia_no_valida(self):
-        """Si la referencia no es correcta, la búsqueda se detiene (no hay C_best,0)."""
-        agente = Agente(medir_falso(invalida=lambda malla: True), BASE, parametros(iniciales="referencia"))
-        self.assertEqual(agente.buscar(), [])
-        self.assertEqual(agente.terminada, "referencia no válida")
-        self.assertEqual(len(agente.historial), 1)
-
-    def test_11_las_cotas_no_cambian_la_cadena(self):
-        """Con las cotas del área, el barrido corta antes y se mide menos, pero la mejor es la misma."""
-        resultados = {}
-        for con_cotas in (False, True):
-            llamadas = []
-            cota, cota_tamano = cotas_falsas(k_area=30) if con_cotas else (None, None)
-            agente = Agente(medir_falso(k_area=30, llamadas=llamadas), BASE,
-                            parametros(barrido=True, lado_maximo=8, max_rondas=3),
-                            cota=cota, cota_tamano=cota_tamano)
-            cadena = agente.buscar()
-            resultados[con_cotas] = ([(r.clave, r.costo) for r in cadena], len(llamadas), agente.barrido)
-        self.assertEqual(resultados[True][0], resultados[False][0])
-        self.assertLess(resultados[True][1], resultados[False][1])
-        self.assertEqual(resultados[False][2]["sin_revisar"], 0)
-        self.assertGreater(resultados[True][2]["sin_revisar"], 0)
+        greedy, camino_greedy = correr(epsilon=0.0)
+        self.assertEqual(set(greedy.decisiones[1:]), {"explotacion"})
+        agente, camino = correr(epsilon=0.5, semilla=3)
+        self.assertEqual(camino, correr(epsilon=0.5, semilla=3)[1])  # misma semilla, mismo camino
+        self.assertEqual(len(camino), len(set(camino)))
+        self.assertEqual(agente.decisiones[0], "inicio")
+        self.assertEqual(len(agente.decisiones), len(camino))
+        self.assertIn("exploracion", agente.decisiones)
+        for i, (actual, siguiente) in enumerate(zip(camino, camino[1:])):
+            libres = [v for v in Agente.vecinos(actual, 5, 6) if v not in camino[:i + 1]]
+            self.assertIn(siguiente, libres)
+            if agente.decisiones[i + 1] == "explotacion":
+                self.assertEqual(agente.pesos[siguiente].peso, min(agente.pesos[v].peso for v in libres))
+        _, otro = correr(epsilon=1.0, semilla=3)
+        self.assertNotEqual(otro, camino_greedy)
+        r = agente.resultado()
+        self.assertEqual(r["exploraciones"], agente.decisiones.count("exploracion"))
+        self.assertEqual([p["decision"] for p in r["camino"]], agente.decisiones)
+        with self.assertRaisesRegex(ValueError, "epsilon"):
+            correr(epsilon=1.5)
 
 
 class TestAgenteConEvaluador(_ConOperaciones):
-    """El agente con el evaluador real (Dijkstra + simulador), en una búsqueda corta."""
+    """El agente con el evaluador real (Dijkstra + simulador)."""
 
-    def test_1_busqueda_corta_con_el_evaluador_real(self):
-        """Desde la referencia, una ronda con el simulador debe dar una cadena correcta que no sube el costo."""
+    def test_1_camino_con_el_evaluador_real(self):
+        """La malla 3x3 simulada da NOPs por PE, pesos para los 9 PEs y un camino desde PE00."""
         evaluador = Evaluador([self.pequena], carpeta_programas=self.programas)
-        agente = Agente(evaluador.evaluar, BASE,
-                        parametros(max_rondas=1, lado_maximo=3, iniciales="referencia", max_evaluaciones=4),
-                        cota=evaluador.cota, cota_tamano=evaluador.cota_tamano)
-        cadena = agente.buscar()
-        self.assertTrue(cadena)
-        for r in cadena:
-            self.assertTrue(r.valida, r.motivo)
-            self.assertEqual(r.evaluacion.correctitud, 0)
-        self.assertEqual(cadena[0].malla, agente.referencia())
-        self.assertLessEqual(cadena[-1].costo, evaluador.evaluar(evaluador.referencia()).costo)
+        agente = Agente(evaluador.evaluar, BASE, parametros())
+        camino = agente.buscar()
+        self.assertEqual(agente.evaluacion.estado, "correcta")
+        self.assertEqual(len(agente.pesos), 9)
+        operacion = agente.evaluacion.operaciones[self.pequena]
+        self.assertEqual(sum(operacion.nops_por_pe.values()), operacion.nops)
+        self.assertEqual(camino[0], "PE00")
+        self.assertEqual(len(camino), len(set(camino)))
+        self.assertGreater(agente.valuar_camino()["C"], 0)
 
     def test_2_en_paralelo_da_lo_mismo(self):
-        """Evaluar en varios procesos debe dar los mismos costos y en el mismo orden que en serie."""
-        agente = Agente(lambda c: None, BASE, parametros())
-        configuraciones = [agente.configuracion(m) for m in agente.vecinas(MALLA_3X3)[:6]]
-        serie = Evaluador([self.pequena], carpeta_programas=self.programas)
-        paralelo = EvaluadorParalelo([self.pequena], self.programas, RUTA_COSTOS, procesos=2)
-        try:
-            resultados = paralelo.lote(configuraciones)
-        finally:
-            paralelo.cerrar()
-        self.assertEqual([r.costo for r in resultados], [serie.evaluar(c).costo for c in configuraciones])
-
+        """Simular cada operación en su propio proceso da el mismo costo y los mismos NOPs por PE."""
+        agente = Agente(None, BASE, parametros())
+        configuracion = agente.configuracion()
+        serie = Evaluador(list(self.nombres), carpeta_programas=self.programas).evaluar(configuracion)
+        paralelo = medir_en_paralelo(configuracion, list(self.nombres), self.programas, RUTA_COSTOS, procesos=2)
+        self.assertEqual(paralelo.estado, serie.estado)
+        self.assertAlmostEqual(paralelo.costo, serie.costo)
+        for op in self.nombres:
+            self.assertEqual(paralelo.operaciones[op].nops_por_pe, serie.operaciones[op].nops_por_pe)
 
 
 class TestCompilarSkill02(unittest.TestCase):
-    """El agente corre el skill 02 solo cuando falta algo o operaciones.c cambió."""
+    """El ciclo corre los skills 02-03 solo cuando falta algo o operaciones.c cambió."""
 
     def setUp(self):
         self.directorio = tempfile.TemporaryDirectory()
@@ -288,7 +247,9 @@ class TestCompilarSkill02(unittest.TestCase):
         self.assertEqual(preparar(operaciones, self.programas, self.fuente), operaciones)
         for operacion in operaciones:
             carpeta = self.programas / operacion
-            self.assertEqual(sorted(p.name for p in carpeta.iterdir()), ["memoria.bin", "operaciones.ll"])
+            nombres = {p.name for p in carpeta.iterdir()}
+            self.assertLessEqual({"memoria.bin", "operaciones.ll", *grafos(operacion)}, nombres)  # skills 02-03
+            self.assertNotIn("operaciones.out", nombres)
             self.assertIn('source_filename = "../../operaciones/operaciones.c"',
                           (carpeta / "operaciones.ll").read_text(encoding="utf-8"))
         self.assertEqual(preparar(operaciones, self.programas, self.fuente), [])
@@ -311,6 +272,8 @@ class TestCompilarSkill02(unittest.TestCase):
         with self.assertRaisesRegex(ErrorCompilacion, "No se encontró"):
             preparar(SimuladorCGRA.operaciones(self.fuente)[:1], self.programas, self.fuente,
                      clang="clang-no-existe")
+        with self.assertRaisesRegex(ErrorCompilacion, "No se encontró"):
+            preparar(SimuladorCGRA.operaciones(self.fuente)[:1], self.programas, self.fuente, opt="opt-no-existe")
         self.assertFalse((self.programas / "no_existe" / "operaciones.out").exists())
 
 

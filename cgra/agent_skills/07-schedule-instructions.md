@@ -4,7 +4,7 @@
 
 Convert mapped PE work into cycle-by-cycle instructions.
 
-Apply the [Mesh Compatibility Contract](mesh-compatibility.md). Select local,
+Apply the [Mesh Compatibility Contract](mesh-compatibility.md). Select
 vertical, paired, border or explicit-path schedules from the manifest; the
 adjacent horizontal tables below are specialized templates, not constraints
 on all valid mesh sizes. Verify that the shared loader supports the actual map.
@@ -45,14 +45,12 @@ The instructions a PE may emit depend on its type (`src/cgra.json`, skill 01):
 memoria (M):   NOP, MOV, LD, ST, SEND, RECV, VLD, VST, VSEND, VRECV
 escalar (E):   NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV
 vectorial (V): NOP, MOV, SEND, RECV, VADD, VSUB, VMUL, VDIV, VREDSUM, VBCAST, VSEND, VRECV
-computo (C):   E + V
-generico (G):  scalar memory + compute ISA, vector ISA when configured
 ```
 
 The vector instructions are only emitted in `vectorial` mode: take the exact
 lists from the map printed in skill 01. In the tables below, `M` is a memory
-PE and `C` the compute PE that runs the column (an `E` for the scalar tables,
-a `V` or `C` for the vector ones).
+PE and `P` the compute PE that runs the column (an `E` for the scalar tables,
+a `V` for the vector ones). `P` is only a role in the tables, not a PE type.
 
 Never emit an instruction outside the type of the PE: `run_cgra.py` refuses to
 load the program and reports the PE and cycle.
@@ -61,8 +59,8 @@ load the program and reports the PE and cycle.
 
 1. Emit exactly one instruction per PE per cycle.
 2. Insert `NOP` when a PE has no work during a cycle.
-3. Respect the actual instruction lists: LD/ST on memory-capable M/G,
-   arithmetic on eligible E/V/C/G. A G may fulfill both roles in different cycles.
+3. Respect the actual instruction lists: LD/ST only on M, scalar arithmetic
+   only on E and vector arithmetic only on V.
 4. Do not use a register before the instruction that defines it, and do not
    overwrite it before its last use.
 5. Align neighbor communication: a `SEND <dir>` and the neighbor's
@@ -73,48 +71,23 @@ load the program and reports the PE and cycle.
 7. For local accumulation, accumulate in the compute PE before starting the
    reduction across the mesh.
 
-## Local Execution: 1x1 G
-
-Use the same bank names and bounds as every other layout. A scalar reduction
-starts with `MOV acc, 0.0`, repeats the following per input element, then ends
-with `ST result[0], acc`:
-
-```text
-LD rA, a[i]
-LD rB, b[i]
-ADD rC, rA, rB
-ST c[i], rC
-ADD acc, acc, rC
-```
-
-For each matmul/convolution output, clear acc, repeat local `LD rA`, `LD rB`,
-`MUL rC, rA, rB`, `ADD acc, acc, rC` for all accumulation steps, then store
-acc in that output position. Reuse the singleton for the next output. There
-are no sends, receives or self-neighbors. Vector local execution is optional
-when the real G instruction list and width support it; scalar execution is a
-valid baseline and handles all remainders.
-
 ## Narrow Meshes
 
-- **Nx2:** each row has M west and C east. Use the single-server adjacent
-  tables with `to C = east` and `to M = west`. Scalar/vector phases on the
-  same C must not overlap. Combine reduction partials up the east column and
-  send the total west to the selected memory PE.
-- **Nx1, N >= 2:** M at row 0 serves C below. For the nearest C, translate
-  the adjacent tables to `to C = south`, `to M = north`. More distant C use
-  explicit vertical relays; serialize shared-server and relay conflicts.
-  Reduce upward through C to row 1, then send north to memory at row 0.
-- **1x3 or 2x3:** every row is M C M. Use the two-server tables already below.
-  Each C handles full vector blocks and a separately scheduled scalar tail.
-  1x3 has no inter-compute reduction; 2x3 combines the two C partials up the
-  middle column before storing at the selected memory PE.
-- **One or two rows, more than 3 columns:** keep M at both ends, with every
-  interior PE C. Use the existing adjacent/shared-server rules and record
-  horizontal relays. Reduce each compute row toward its westmost C and, for
-  two rows, combine upward. Scalar and vector work on a shared C uses separate
-  phases, unless different C PEs have been reserved for concurrent work.
-- **At least 3 rows and 3 columns:** preserve the original normal-mesh
-  schedules and E/V/C row rotation; the exceptions above do not replace them.
+1x1, 2x1, 1x2 and single-row meshes are not valid (skill 01); never schedule
+them.
+
+- **Nx2, N >= 2:** rows are `M E`, `M V`, `M E`... Use the single-server
+  adjacent tables with `to P = east` and `to M = west`: the `E` rows run the
+  scalar tables and the `V` rows the vector ones. Combine reduction partials
+  up the east column (the `V` rows forward scalar partials, skill 06) and send
+  the total west to the selected memory PE.
+- **Nx1, N >= 3:** M at row 0 serves E, V, E... below. For the nearest
+  compute PE, translate the adjacent tables to `to P = south`, `to M = north`.
+  More distant PEs use explicit vertical relays; serialize shared-server and
+  relay conflicts. Reduce upward to row 1, then send north to memory at row 0.
+- **At least 2 rows and 3 columns:** the border schedules and E/V row
+  rotation. With 3 columns every row is `M E M` or `M V M`: use the
+  [Two Servers](#two-servers) tables.
 - **Other explicit maps:** use the recorded paths/root/output PE. Neither
   orientation nor endpoint may be inferred solely from a border coordinate.
 
@@ -127,7 +100,7 @@ and reduction work may replace NOP on a PE with no assigned output unit.
 ## Adjacent Border Templates
 
 The tables below are for a compute PE **next to its server** that is the only
-compute PE of that server, as with two compute columns (skill 06). `<to C>` is
+compute PE of that server, as with two compute columns (skill 06). `<to P>` is
 the direction from the server to its compute PE (`east` for a west server,
 `west` for an east server) and `<to M>` is the opposite one. All server/compute
 pairs run the same table at the same time. With `3` columns, see
@@ -141,14 +114,14 @@ pairs run the same table at the same time. With `3` columns, see
    previous iteration while its server already loads the next one.
 
    ```text
-   cycle | server (M)                    | compute (C)
+   cycle | server (M)                    | compute (P)
    ------+-------------------------------+------------------------------------
    t+0   | LD   rA, a[i]                 | ADD  acc, acc, rC   (previous i)
-   t+1   | SEND <to C>, rA               | RECV <to M>, rA
+   t+1   | SEND <to P>, rA               | RECV <to M>, rA
    t+2   | LD   rB, b[i]                 | NOP
-   t+3   | SEND <to C>, rB               | RECV <to M>, rB
+   t+3   | SEND <to P>, rB               | RECV <to M>, rB
    t+4   | ST   c[previous i], rC        | ADD  rC, rA, rB
-   t+5   | RECV <to C>, rC               | SEND <to M>, rC
+   t+5   | RECV <to P>, rC               | SEND <to M>, rC
    ```
 
    - In the first step, the compute PE emits `MOV acc, 0.0` at `t+0` and the
@@ -169,7 +142,7 @@ pairs run the same table at the same time. With `3` columns, see
    use `SEND north` / `RECV south`.
 
 3. Store, two cycles: the compute PE at the end of the route sends the total to
-   its server (`SEND <to M>, acc` / `RECV <to C>, rC`), and the server emits
+   its server (`SEND <to M>, acc` / `RECV <to P>, rC`), and the server emits
    `ST result[0], rC` in the next cycle.
 
 ## Matmul and Convolucion Tile Schedule
@@ -180,12 +153,12 @@ step**, pipelined so that the server loads and sends every cycle while the
 compute PE multiplies and accumulates the previous step:
 
 ```text
-cycle | server (M)                  | compute (C)
+cycle | server (M)                  | compute (P)
 ------+-----------------------------+------------------------------------
 t+0   | LD   rA, <operand A>        | MUL  rC, rA, rB      (previous step)
-t+1   | SEND <to C>, rA             | RECV <to M>, rA
+t+1   | SEND <to P>, rA             | RECV <to M>, rA
 t+2   | LD   rB, <operand B>        | ADD  acc, acc, rC    (previous step)
-t+3   | SEND <to C>, rB             | RECV <to M>, rB
+t+3   | SEND <to P>, rB             | RECV <to M>, rB
 ```
 
 - In the first step of a tile, the compute PE emits `NOP` at `t+0` and
@@ -196,11 +169,11 @@ t+3   | SEND <to C>, rB             | RECV <to M>, rB
 After the last step, close the tile in 4 cycles:
 
 ```text
-cycle | server (M)                  | compute (C)
+cycle | server (M)                  | compute (P)
 ------+-----------------------------+------------------------------------
 e+0   | NOP                         | MUL  rC, rA, rB
 e+1   | NOP                         | ADD  acc, acc, rC
-e+2   | RECV <to C>, rC             | SEND <to M>, acc
+e+2   | RECV <to P>, rC             | SEND <to M>, acc
 e+3   | ST   result[...], rC        | NOP
 ```
 
@@ -214,7 +187,7 @@ matmul and `4 * 16 + 4 = 68` in a convolution with a `4x4` kernel.
 ## Vectorial Mode Schedules
 
 These tables follow the vector work units of skill 06, for a vector compute PE
-(`V` or `C`) next to its server (`M`), as the scalar tables above. The scalar
+(`V`) next to its server (`M`), as the scalar tables above. The scalar
 compute PEs (`E`) run the scalar tables at the same time. Every table was checked in the
 simulator, alone and with scalar and vector rows together. With `3` columns
 use the tables of [Two Servers](#two-servers) instead.
@@ -225,14 +198,14 @@ use the tables of [Two Servers](#two-servers) instead.
    pipelined like the scalar step:
 
    ```text
-   cycle | server (M)                    | compute (C)
+   cycle | server (M)                    | compute (P)
    ------+-------------------------------+------------------------------------
    t+0   | VLD  v0, a[i]                 | VREDSUM rC, v2      (previous block)
-   t+1   | VSEND <to C>, v0              | VRECV <to M>, v0
+   t+1   | VSEND <to P>, v0              | VRECV <to M>, v0
    t+2   | VLD  v1, b[i]                 | ADD  acc, acc, rC   (previous block)
-   t+3   | VSEND <to C>, v1              | VRECV <to M>, v1
+   t+3   | VSEND <to P>, v1              | VRECV <to M>, v1
    t+4   | VST  c[previous i], v2        | VADD v2, v0, v1
-   t+5   | VRECV <to C>, v2              | VSEND <to M>, v2
+   t+5   | VRECV <to P>, v2              | VSEND <to M>, v2
    ```
 
    - In the first block, the compute PE emits `MOV acc, 0.0` at `t+0` and `NOP`
@@ -240,8 +213,9 @@ use the tables of [Two Servers](#two-servers) instead.
    - After the last block, two closing cycles: the server emits
      `VST c[last i], v2` and then `NOP`; the compute PE emits `VREDSUM rC, v2`
      and then `ADD acc, acc, rC`.
-   - A `V` compute PE (no scalar `ADD`) accumulates the blocks in `v4`
-     instead: at `t+0` it emits `VADD v4, v4, v2` (previous block) instead
+   - The rows with scalar `ADD acc` above do not apply as written: every
+     vector compute PE is a `V`, which has no scalar `ADD`, and accumulates
+     the blocks in `v4` instead: at `t+0` it emits `VADD v4, v4, v2` (previous block) instead
      of `VREDSUM`, and `NOP` at `t+2`. In the first block it clears `v4` with
      `MOV rT, 0.0` at `t+0` and `VBCAST v4, rT` at `t+2`. Its two closing
      cycles are `VADD v4, v4, v2` and `NOP`. A `V` with no blocks emits
@@ -250,10 +224,8 @@ use the tables of [Two Servers](#two-servers) instead.
    compute PEs, with the scalar 6-cycle step of
    [Reduccion Schedule](#reduccion-schedule) and its closing cycle, in the same
    cycles as the blocks of the vector rows.
-   - If there are no eligible scalar-only PEs, the scalar-capable `C/G` do the
-     tail after their blocks (a `V` cannot: it has no scalar `ADD`): in the first tail step the compute PE emits
-     `NOP` at `t+0` instead of `ADD` (there is no previous scalar element) and
-     the server `NOP` at `t+4`.
+   - If there is no eligible `E` for the tail, it is an operation error (a `V`
+     cannot run it: it has no scalar `ADD`).
 3. A participating compute PE with no work emits `MOV acc, 0.0`, or clears v4
    with `MOV rT, 0.0` and `VBCAST v4, rT` if it is V. Other idle PEs need not
    contribute to the reduction.
@@ -279,28 +251,28 @@ the compute PE copies the scalar to every lane, multiplies and accumulates the
 previous step in `v3`:
 
 ```text
-cycle | server (M)                  | compute (C)
+cycle | server (M)                  | compute (P)
 ------+-----------------------------+------------------------------------
 t+0   | LD   rA, <scalar factor>    | VMUL v2, v0, v1      (previous step)
-t+1   | SEND <to C>, rA             | RECV <to M>, rA
+t+1   | SEND <to P>, rA             | RECV <to M>, rA
 t+2   | VLD  v1, <vector factor>    | VADD v3, v3, v2      (previous step)
-t+3   | VSEND <to C>, v1            | VRECV <to M>, v1
+t+3   | VSEND <to P>, v1            | VRECV <to M>, v1
 t+4   | NOP                         | VBCAST v0, rA
 ```
 
 - In the first step of a tile, the compute PE clears `v3`: `MOV rT, 0.0` at
   `t+0` and `VBCAST v3, rT` at `t+2`.
-- The table has no scalar arithmetic, so `V` and `C` run it the same way.
+- The table has no scalar arithmetic, so a `V` runs it as written.
 - The factors are the ones of skill 06.
 
 After the last step, close the tile in 4 cycles:
 
 ```text
-cycle | server (M)                  | compute (C)
+cycle | server (M)                  | compute (P)
 ------+-----------------------------+------------------------------------
 e+0   | NOP                         | VMUL v2, v0, v1
 e+1   | NOP                         | VADD v3, v3, v2
-e+2   | VRECV <to C>, v3            | VSEND <to M>, v3
+e+2   | VRECV <to P>, v3            | VSEND <to M>, v3
 e+3   | VST  result[...], v3        | NOP
 ```
 
@@ -315,13 +287,13 @@ until the other one ends.
 
 With `3` columns each compute PE has a server on each side (skill 06): the west
 one (`O`) sends the first operand, and the east one (`E`) sends the second and
-stores the results. `C` is the compute PE. Every table was checked in the
+stores the results. `P` is the compute PE. Every table was checked in the
 simulator.
 
 ### Reduccion, scalar: 5-cycle step
 
 ```text
-cycle | west (O)          | east (E)               | compute (C)
+cycle | west (O)          | east (E)               | compute (P)
 ------+-------------------+------------------------+------------------------------
 t+0   | LD   rA, a[i]     | LD   rB, b[i]          | ADD  acc, acc, rC  (previous i)
 t+1   | SEND east, rA     | NOP                    | RECV west, rA
@@ -330,13 +302,13 @@ t+3   | NOP               | ST   c[previous i], rC | ADD  rC, rA, rB
 t+4   | NOP               | RECV west, rC          | SEND east, rC
 ```
 
-First step: `MOV acc, 0.0` in `C` at `t+0` and `NOP` in `E` at `t+3`. One
-closing cycle: `E` emits `ST c[last i], rC` and `C` emits `ADD acc, acc, rC`.
+First step: `MOV acc, 0.0` in `P` at `t+0` and `NOP` in `E` at `t+3`. One
+closing cycle: `E` emits `ST c[last i], rC` and `P` emits `ADD acc, acc, rC`.
 
 ### Reduccion, vector: 6-cycle step
 
 ```text
-cycle | west (O)          | east (E)               | compute (C)
+cycle | west (O)          | east (E)               | compute (P)
 ------+-------------------+------------------------+------------------------------
 t+0   | VLD  v0, a[i]     | VLD  v1, b[i]          | VREDSUM rC, v2    (previous block)
 t+1   | VSEND east, v0    | NOP                    | VRECV west, v0
@@ -346,12 +318,12 @@ t+4   | NOP               | NOP                    | VADD v2, v0, v1
 t+5   | NOP               | VRECV west, v2         | VSEND east, v2
 ```
 
-First step: `MOV acc, 0.0` in `C` at `t+0`, `NOP` in `C` and in `E` at `t+3`.
-Two closing cycles: `E` emits `VST c[last i], v2` and `NOP`; `C` emits
+First step: `MOV acc, 0.0` in `P` at `t+0`, `NOP` in `P` and in `E` at `t+3`.
+Two closing cycles: `E` emits `VST c[last i], v2` and `NOP`; `P` emits
 `VREDSUM rC, v2` and `ADD acc, acc, rC`.
 
-This two-server vector table uses scalar ADD and therefore directly applies
-to C/G. For a V, substitute vector partial accumulation as in the single-server
+This two-server vector table uses scalar ADD, which a `V` does not have, so
+it does not apply as written. Every vector compute PE is a `V`: substitute vector partial accumulation as in the single-server
 V variant: initialize v4 with MOV/VBCAST, replace the previous-block VREDSUM
 with VADD into v4, omit scalar ADD, and close with VADD. Select a compatible
 vector reduction plan; never assume V can execute the scalar ADD in this table.
@@ -359,7 +331,7 @@ vector reduction plan; never assume V can execute the scalar ADD in this table.
 ### Matmul and Convolucion, scalar: 4-cycle step
 
 ```text
-cycle | west (O)            | east (E)            | compute (C)
+cycle | west (O)            | east (E)            | compute (P)
 ------+---------------------+---------------------+------------------------------
 t+0   | LD   rA, <operand A>| LD   rB, <operand B>| MUL  rC, rA, rB    (previous step)
 t+1   | SEND east, rA       | NOP                 | RECV west, rA
@@ -367,15 +339,15 @@ t+2   | NOP                 | NOP                 | ADD  acc, acc, rC  (previous
 t+3   | NOP                 | SEND west, rB       | RECV east, rB
 ```
 
-First step of a tile: `NOP` in `C` at `t+0` and `MOV acc, 0.0` at `t+2`. Close
-the tile in 4 cycles: `C` emits `MUL rC, rA, rB`, `ADD acc, acc, rC`,
+First step of a tile: `NOP` in `P` at `t+0` and `MOV acc, 0.0` at `t+2`. Close
+the tile in 4 cycles: `P` emits `MUL rC, rA, rB`, `ADD acc, acc, rC`,
 `SEND east, acc`, `NOP`; `E` emits `NOP`, `NOP`, `RECV west, rC`,
 `ST result[...], rC`; `O` emits `NOP`.
 
 ### Matmul and Convolucion, vector: 5-cycle step
 
 ```text
-cycle | west (O)                 | east (E)                  | compute (C)
+cycle | west (O)                 | east (E)                  | compute (P)
 ------+--------------------------+---------------------------+--------------------------
 t+0   | LD   rA, <scalar factor> | VLD  v1, <vector factor>  | VMUL v2, v0, v1 (previous step)
 t+1   | SEND east, rA            | NOP                       | RECV west, rA
@@ -384,8 +356,8 @@ t+3   | NOP                      | VSEND west, v1            | VRECV east, v1
 t+4   | NOP                      | NOP                       | VBCAST v0, rA
 ```
 
-First step of a tile: `MOV rT, 0.0` in `C` at `t+0` and `VBCAST v3, rT` at
-`t+2`. Close the tile in 4 cycles: `C` emits `VMUL v2, v0, v1`,
+First step of a tile: `MOV rT, 0.0` in `P` at `t+0` and `VBCAST v3, rT` at
+`t+2`. Close the tile in 4 cycles: `P` emits `VMUL v2, v0, v1`,
 `VADD v3, v3, v2`, `VSEND east, v3`, `NOP`; `E` emits `NOP`, `NOP`,
 `VRECV west, v3`, `VST result[...], v3`; `O` emits `NOP`.
 
@@ -399,10 +371,10 @@ same neighbor-hop rules. There is no fixed table for all of them:
 1. A delivery to a compute PE at distance `d` takes `d` cycles, one hop per
    cycle along the path. Each relay receives the value into `rT`
    in one cycle (`RECV <to M>, rT`) and sends it on in the next
-   (`SEND <to C>, rT`). The last hop receives into the real register (`rA`,
+   (`SEND <to P>, rT`). The last hop receives into the real register (`rA`,
    `rB`), and results travel back to the server the same way. A vector is
    relayed the same way through `v7` (`VRECV <to M>, v7`, then
-   `VSEND <to C>, v7`).
+   `VSEND <to P>, v7`).
    Every relay must support both instructions of the transfer type. Keep
    live scalar partial sums separate from rT and live vectors separate from
    v7. A V reduction that forwards a scalar partial already using rT needs
@@ -449,7 +421,7 @@ Produce a global schedule table first when useful, with one column per PE of the
 configured mesh and its type, in the order of the map printed in skill 01:
 
 ```text
-Cycle | PE00 (M)          | PE01 (C)          | ... | PE0<last> (M)
+Cycle | PE00 (M)          | PE01 (E)          | ... | PE0<last> (M)
 ------+-------------------+-------------------+-----+-------------------
 00    | LD rA, a[0]       | MOV acc, 0.0      | ... | LD rA, a[...]
 01    | SEND east, rA     | RECV west, rA     | ... | SEND west, rA

@@ -1,23 +1,24 @@
 {
-  "descripcion": "Parámetros del agente Greedy (cadena de mejoras, determinístico). Los parámetros de evaluación (pesos, K, tolerancias, P_fallo, restricciones, referencia) no van aquí: están en costos.json, con los valores de la corrida RL.",
-  "max_evaluaciones": 10,
-  "paciencia": 3,
-  "max_rondas": 50,
-  "lado_minimo": null,
-  "lado_maximo": null,
-  "iniciales": "referencia",
-  "barrido": false,
-  "lote_barrido": 16,
-  "interior_alternativo": "C",
+  "descripcion": "Parámetros del agente: camino por los PEs de una malla con una política epsilon-greedy (con probabilidad epsilon un vecino libre al azar; si no, el de menor peso). Los pesos w1-w4, K, tolerancias, restricciones y normalizadores están en costos.json, con los mismos valores de la solución RL.",
+  "malla": [
+    32,
+    32
+  ],
+  "inicio": [
+    0,
+    0
+  ],
+  "epsilon": 0.1,
+  "semilla": 0,
   "procesos": null,
+  "t_max_simulacion_s": 36000,
   "comentarios": {
-    "max_evaluaciones / paciencia": "Presupuesto del contrato con el RL (solucion_rl.md, fila 19): el mismo max_iteraciones y paciencia de la corrida RL con que se compara (corrida_todas_codex: 10 y 3; r05-exploracion: 1000 y 1000). max_evaluaciones no cuenta la referencia; paciencia cuenta evaluaciones seguidas que no bajan el mínimo en más de tolerancia_empate_costo (error_infraestructura no cuenta). null = sin límite.",
-    "max_rondas": "Máximo de rondas de vecinas. La búsqueda termina antes si se agota el presupuesto o si ninguna vecina de la mejor baja el costo.",
-    "lado_minimo / lado_maximo": "Límites propios del agente para filas y columnas, dentro de las restricciones de costos.json (null = sin límite propio).",
-    "iniciales": "'referencia': la ronda 0 es la referencia de costos.json (contrato, fila 18). Una lista de tamaños [filas, columnas] parte de la distribución de cgra.json (no cumple el contrato).",
-    "barrido": "Ronda 0 alternativa: todos los tamaños, de menos a más PEs, con cotas por área. Apagado: no empieza en la referencia (contrato, fila 18).",
-    "lote_barrido": "Tamaños por lote del barrido.",
-    "interior_alternativo": "Con iniciales por tamaño o barrido: además de cada malla de la distribución, una variante con todos los PEs que no son de memoria de este tipo (null = sin variante).",
-    "procesos": "Procesos para evaluar en paralelo en la búsqueda en memoria (null = uno por núcleo, 1 = sin paralelismo). No cambia el resultado."
+    "malla": "La malla del grafo: [filas, columnas] con la distribución de cgra.json (por defecto [32, 32], la más pesada) o una lista de filas como [\"M E M\", \"M V M\"]. Cada PE es un vértice y cada conexión con un vecino norte, sur, este u oeste es una arista.",
+    "peso": "Peso de un PE = w_tipo · (1 + NOPs/ciclos). w_tipo es el área de su tipo con pesos_area (w1-w4) de costos.json: M = 12, E = 1, V = 2. NOPs y ciclos salen del reporte_ciclos.txt del simulador, sumados sobre las operaciones. Para tenerlos, la malla se mapea con Dijkstra y se simula una vez (en 32x32, horas); --continuar reusa esa simulación.",
+    "inicio": "[fila, columna] del PE donde empieza el camino; [0, 0] es PE00 (PE0000 en mallas de 11 o más filas o columnas). El camino termina cuando el PE actual no tiene vecinos sin visitar. Ningún PE se visita dos veces: no hay ciclos.",
+    "epsilon": "Política epsilon-greedy: en cada paso, con probabilidad epsilon se explora (se elige al azar uno de los vecinos sin visitar) y si no se explota (el vecino sin visitar de menor peso; en empate, el primero fila por fila). 0 = Greedy puro; 1 = siempre al azar.",
+    "semilla": "Semilla del azar de la exploración: con la misma semilla y los mismos pesos sale el mismo camino. Cambiarla da otro camino con el mismo epsilon.",
+    "procesos": "Procesos para simular las operaciones de la malla en paralelo (null = uno por operación).",
+    "t_max_simulacion_s": "Tiempo máximo del simulador para la malla, en segundos (el de costos.json es 60, pensado para mallas chicas)."
   }
 }

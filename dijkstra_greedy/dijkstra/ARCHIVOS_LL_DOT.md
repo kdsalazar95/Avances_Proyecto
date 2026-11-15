@@ -88,7 +88,7 @@ Dijkstra necesita el grafo **desenrollado**: cada operación por separado, con s
 2. A -O0 está lleno de dependencias de contadores y de `acc` que habría que limpiar, y para eso igual hace falta el IR.
 3. El `.dot` es texto para dibujar: leerlo obliga a interpretar instrucciones LLVM escritas como etiquetas, que es lo mismo que leer el `.ll`, pero en un formato peor.
 
-Por eso `ir_llvm.py` **ejecuta simbólicamente** `@<operacion>` del `.ll`. Los enteros (índices, contadores) se calculan de verdad, y cada `load`/`store`/`fadd`/`fmul` de float se convierte en un nodo del grafo. El skill 03 queda como ayuda para mirar la estructura.
+Por eso `ir_llvm.py` **ejecuta simbólicamente** `@<operacion>` del `.ll`. Los enteros (índices, contadores) se calculan de verdad, y cada `load`/`store`/`fadd`/`fmul` de float se convierte en un nodo del grafo. El ciclo agente-evaluador corre el skill 03 igual que el flujo con LLM (`dijkstra/compilar.py`), así que los `.dot` quedan en `programas/<operacion>/` para mirar la estructura, pero el bloque Dijkstra, que sustituye al skill 04, arma el grafo desde el `.ll`.
 
 ## Qué toma el bloque Dijkstra (sus entradas)
 

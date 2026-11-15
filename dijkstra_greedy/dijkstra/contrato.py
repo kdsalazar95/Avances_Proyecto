@@ -40,7 +40,9 @@ FORMULAS_LATENCIA = ("ciclos", "ciclos_x_nops")
 FORMULA_RECOMPENSA = "r = C_best_prev - C (correcta); r = -P_fallo (penalizada); None (error_infraestructura)"
 FORMULA_COSTO = ("C = promedio sobre las operaciones de (K_A*C_A/C_A_ref + K_L*C_L,op/C_L_ref,op + K_R*C_R,op)")
 MEMORIA_OPS = frozenset({"LD", "ST", "VLD", "VST"})
-COMPUTO_OPS = frozenset({"ADD", "SUB", "MUL", "DIV", "VADD", "VSUB", "VMUL", "VDIV"})
+ESCALAR_OPS = frozenset({"ADD", "SUB", "MUL", "DIV"})
+VECTORIAL_OPS = frozenset({"VADD", "VSUB", "VMUL", "VDIV"})
+COMPUTO_OPS = ESCALAR_OPS | VECTORIAL_OPS
 
 
 class ErrorReferencia(RuntimeError):
@@ -186,6 +188,12 @@ def validar_accion(datos, formato, restricciones, tipos_esquema):
             motivos.append("la malla no tiene ningún PE de memoria")
         if not ops & COMPUTO_OPS:
             motivos.append("la malla no tiene ningún PE de cómputo")
+    if r.get("requiere_escalar_y_vectorial"):
+        por_pe = [{i.upper() for i in formato.tipos_pe[l]["instrucciones"]} for l in usados]
+        if not any(ops & ESCALAR_OPS for ops in por_pe):
+            motivos.append("la malla no tiene ningún PE escalar (E)")
+        if not any(ops & VECTORIAL_OPS for ops in por_pe):
+            motivos.append("la malla no tiene ningún PE vectorial (V)")
     if r.get("memoria_solo_en_bordes_oeste_este"):
         motivos += _motivos_bordes(formato)
     return motivos
@@ -205,7 +213,7 @@ def _motivos_bordes(formato):
                 motivos.append(f"PE({f},{c}) es {letra}: los bordes oeste y este deben ser de memoria (M)")
             elif c not in bordes and accede_memoria:
                 motivos.append(f"PE({f},{c}) es {letra} y accede a memoria: la memoria solo puede ir en los "
-                               "bordes oeste/este; el interior es de cómputo (E, V o C)")
+                               "bordes oeste/este; el interior es de cómputo (E o V)")
     return motivos
 
 

@@ -1,133 +1,109 @@
-# Dijkstra + Greedy por etapas independientes
+# Dijkstra + Greedy
 
-Cada comando ejecuta solo su etapa. No hay un comando que compile, mapee,
-simule y evalúe automáticamente. Ejecute los comandos desde `dijkstra_greedy/`.
+Es la solución RL con dos piezas cambiadas: el agente es un **Greedy** determinístico y el
+evaluador usa **Dijkstra** en lugar de los skills 04-07. Las ecuaciones de costo son las
+mismas de la solución RL, para que los resultados se puedan comparar.
 
-Estructura del repositorio:
-
-```text
-cgra/               compartido con la solución RL
-  src/              simulador (run_cgra.py, cgra.json, ...), sin modificar
-  operaciones/      operaciones.c y memoria_cgra.h
-  programas/        lo genera la etapa 1 (IR y memoria.bin)
-  agent_skills/     skills 01-09 de la solución RL
-  test/             pruebas del simulador (python3 cgra/test/run_tests.py)
-dijkstra_greedy/    esta solución
-  *.py              una etapa por script
-  dijkstra/         paquete: Dijkstra, evaluador, contrato y agente Greedy
-  config/           costos.json, agente.json, normalizacion.json, compatibilidad.json
-  tests/            pruebas (python3 dijkstra_greedy/tests/run_tests.py)
-```
-
-## 1. Compilación
-
-```bash
-python3 compilar_cgra.py todas
-```
-
-Genera `cgra/programas/<operacion>/operaciones.ll` y `memoria.bin`. Use `--forzar`
-para reconstruir. Debe repetir esta etapa cuando cambie el C o sus cabeceras.
-
-## 2. Propuesta inicial de Greedy
-
-```bash
-python3 agente_greedy.py --salida resultados/greedy
-```
-
-Solo propone hardware. La primera propuesta es la referencia `M E M / M V M / M E M`
-(`config/costos.json → referencia`), como en la solución RL: C_best,0 = C_ref. Escribe
-`propuestas/config_*.json` y conserva el estado en `estado.json`. No lanza procesos
-de evaluación.
-
-## 3. Mapeo con Dijkstra
-
-Ejemplo para una propuesta, con las tres operaciones:
-
-```bash
-python3 mapear_dijkstra.py todas --cgra resultados/greedy/propuestas/config_0001.json --salida resultados/prueba_001
-```
-
-Lee el IR y la memoria existentes y mapea. `--salida` es la carpeta de evaluación; con
-`todas` hay una por operación en `<salida>/<operacion>/`, con la estructura del RL:
+## Ciclo de retroalimentación
 
 ```text
-resultados/prueba_001/reduccion/
-  cgra.json            la configuración, con tamaño fijo y malla explícita
-  memoria.bin          copia de cgra/programas/reduccion/memoria.bin
-  pe_instructions/     PE*.txt de Dijkstra, validados con las reglas E03 del RL
+                      reporte de ciclos de cada PE
+   ┌──────────────────────────────────────────────────┐
+   │                                                  │
+   ▼                                                  │
+Agente Greedy ── malla (32x32) ──▶ Evaluador ◀── operaciones.c
+  pesos de los PEs                     ├─ skills 01-03  entradas, IR + memoria.bin, grafos .dot
+  camino por los PEs                   ├─ Dijkstra      sustituye los skills 04-07
+                                       ├─ skills 08-09  PE*.txt y su validación (E03)
+                                       ├─ simulador     cgra/src/run_cgra.py (reporte_ciclos.txt)
+                                       └─ costos        C_A, C_L, C_R → C
 ```
 
-No ejecuta el simulador. Si Dijkstra no puede mapear o los `.txt` no pasan E03, termina con
-código 1 y la carpeta solo tiene `fallo.json`. Esa operación es `fallo_evaluador`: no la
-simule y entregue la carpeta igual al evaluador.
-
-## 4. Simulación
-
-El simulador es el de `cgra/src/`, el mismo de la solución RL. Desde `dijkstra_greedy/`:
+Un solo comando corre el ciclo completo, desde `dijkstra_greedy/`:
 
 ```bash
-timeout 60 python3 ../cgra/src/run_cgra.py resultados/prueba_001/reduccion --cgra resultados/prueba_001/reduccion/cgra.json --memoria resultados/prueba_001/reduccion/memoria.bin --write-back
+python3 agente_greedy.py                          # resultados en resultados/greedy/
+python3 agente_greedy.py --salida resultados/otra  # otra carpeta (no pisa resultados anteriores)
+python3 agente_greedy.py --continuar --salida resultados/greedy   # reusa la simulación guardada
 ```
 
-Usa `pe_instructions/` de la carpeta y escribe ahí `reporte_ciclos.txt`. Con `--write-back`,
-la memoria final queda en el `memoria.bin` de la carpeta, que es una copia y no la de
-`cgra/programas/`. Repita para `matmul` y `convolucion`.
+1. **Skills 01-03.** Compila `cgra/operaciones/operaciones.c`: `operaciones.ll` y `memoria.bin`
+   con `clang-18`, y los grafos `.dot` con `opt-18`, en `cgra/programas/<operacion>/`. Solo
+   recompila si falta algo o si cambió el C (`--forzar-compilacion` para repetirlo).
+2. **Una simulación de la malla.** La malla del grafo (`malla` en `config/agente.json`; por
+   defecto la más pesada, 32x32, con la distribución de `cgra.json`) se mapea con Dijkstra y se
+   simula una vez, cada operación en su propio proceso. En 32x32 tarda horas; queda guardada en
+   `evaluacion_malla.json` y `--continuar` la reusa.
+3. **Pesos de los PEs.** El grafo de Greedy es la malla: cada **vértice es un PE** y cada
+   **arista es la conexión con un vecino** norte, sur, este u oeste. El peso de un PE es
+   `w_tipo · (1 + NOPs/ciclos)`: `w_tipo` es el área de su tipo con los pesos w1-w4 de
+   `config/costos.json` (M = 12, E = 1, V = 2), y NOPs y ciclos salen del `reporte_ciclos.txt`
+   del simulador, sumados sobre las operaciones. Un PE que pasa más tiempo en NOP pesa más.
+4. **Camino epsilon-greedy.** Empieza en PE00 (`inicio`) y revisa los vecinos que todavía no
+   visitó. Con probabilidad `epsilon` **explora**: elige uno de ellos al azar. Si no, **explota**:
+   elige el de menor peso (en empate, el primero fila por fila). Repite hasta que el PE actual no
+   tiene vecinos sin visitar. No es recursivo y ningún PE se visita dos veces: no hay ciclos.
+   Con `epsilon: 0` es Greedy puro; la `semilla` hace que la misma corrida dé el mismo camino.
+   El resultado son los PEs del camino; no tienen que formar un rectángulo.
+5. **Valuación del camino.** Con los datos de esa misma simulación (sin volver a simular) se aplica
+   la función de costo a los PEs del camino: C_A = suma de w_tipo de los PEs del camino; por
+   operación, C_L = ciclos·(1 + NOPs del camino/(ciclos·PEs del camino)); C_R el de la simulación;
+   C = promedio de K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R, con los normalizadores del RL.
 
-El tiempo máximo del contrato es `t_max_simulacion_s` = 60 s (`config/costos.json`). Si el
-simulador lo supera o termina con error, esa operación es `fallo_simulador`: pásela al
-evaluador con `--fallo OPERACION=fallo_simulador[:detalle]`.
+## Resultados
 
-## 5. Evaluación de costos
+| Archivo | Contenido |
+|---|---|
+| `camino.json` | **El resultado:** los PEs del camino en orden, con su tipo, NOPs, ciclos, peso y la decisión de cada paso (explotación o exploración); cuántos de cada tipo; el peso total; el mapa de la malla con `.` en los PEs que quedan fuera, y la valuación (C, C_A, C_L, C_R por operación) |
+| `pesos.json` | El peso de cada PE de la malla y los datos con que se calculó |
+| `evaluacion_malla.json` | La evaluación de la malla: estado, C, costos por operación y NOPs por PE del reporte de ciclos |
+| `resumen.json` | Malla, su C, PE de inicio, PEs del camino por tipo, peso total, C del camino y tiempo |
 
-```bash
-python3 evaluar_cgra.py --reporte reduccion=resultados/prueba_001/reduccion --reporte matmul=resultados/prueba_001/matmul --reporte convolucion=resultados/prueba_001/convolucion --salida resultados/prueba_001/evaluacion.json
+## Costo (igual que la solución RL)
+
+Lo calcula `dijkstra/contrato.py` con los parámetros de `config/costos.json`.
+
+- **C_A** = w1·n_MS + w2·n_MV + w3·n_CS + w4·n_CV, con w3 < w4 < w1 < w2 = 1, 2, 4, 8.
+  Por tipo de PE: M = 12, E = 1, V = 2.
+- **C_L**, por operación = ciclos·(1 + NOPs/(ciclos·PEs)): más ciclos o más NOPs cuestan más.
+- **C_R**, por operación = promedio de |esperado − obtenido|/(|esperado| + ε).
+- **C** = promedio sobre las operaciones de K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R, con
+  K = 1, 1, 1. Solo cuenta si todas las operaciones son `correcta`; si no, C = P_fallo = 10.
+
+Los normalizadores C_A_ref y C_L_ref son los de la referencia `M E M / M V M / M E M` medida con
+la solución RL (`config/normalizacion.json`). Esa referencia es solo para normalizar; el punto de
+partida de la búsqueda es la 32x32.
+
+## Configuración
+
+| Archivo | Qué define |
+|---|---|
+| `config/costos.json` | Ecuaciones: pesos, K, tolerancias, P_fallo, restricciones del espacio de acciones, referencia de normalización |
+| `config/normalizacion.json` | C_A_ref y C_L_ref por operación (medidos con la solución RL) |
+| `config/agente.json` | Agente: malla del grafo, PE de inicio, `epsilon` y `semilla`, procesos y tiempo máximo de simulación |
+| `config/compatibilidad.json` | Operación del grafo → instrucción del ISA (para Dijkstra) |
+
+## Estructura
+
+```text
+agente_greedy.py      el ciclo agente-evaluador (único comando)
+config/               costos, normalizadores, agente y compatibilidad
+dijkstra/
+  agente.py           agente Greedy: pesos de los PEs y camino por el vecino de menor peso
+  evaluador.py        evaluador: Dijkstra, PE*.txt, E03, simulador y costos
+  contrato.py         ecuaciones y validaciones compartidas con la solución RL
+  compilar.py         skills 02-03 (clang-18, opt-18)
+  ir_llvm.py          skill 04: grafo de datos desenrollado desde operaciones.ll
+  vectorizar.py       skills 04-05: agrupación vectorial (VLD, VADD, VREDSUM...)
+  hardware.py         skills 05-06: malla y compatibilidad por tipo de PE
+  mapeador.py         skill 07: Dijkstra en la malla extendida en el tiempo
+  verificador.py      revisión independiente del mapeo
+  salida.py           skill 08: PE*.txt
+  validacion_programas.py   skill 09 (E03): validación de los PE*.txt
+  simulacion.py       el simulador de cgra/src/ en otro proceso
+  dfg.py              grafo de datos y resultado esperado
+tests/                pruebas (python3 dijkstra_greedy/tests/run_tests.py)
 ```
 
-No compila, mapea ni simula. Lee de cada carpeta los ciclos y NOPs de `reporte_ciclos.txt` y
-la memoria final de `memoria.bin`, como `rl/medicion/simulacion.py`, y sigue el contrato con
-la solución RL (`dijkstra/contrato.py`):
-
-- **Validación previa**: las reglas de `rl/agente/paquete.py`. Si no las cumple, el estado es `accion_invalida`.
-- **Validación funcional**: compara la memoria final con el grafo ejecutado sobre
-  `cgra/programas/<operacion>/memoria.bin`, elemento por elemento. Si algún elemento supera
-  ε_abs + ε_rel·|y|, es `incorrecta`.
-- **C_A**: w = 4, 8, 1, 2 sobre las capacidades de cada PE.
-- **C_L, por operación**: ciclos·(1 + NOPs/(ciclos·PEs)) (`ciclos_x_nops`).
-- **C_R, por operación**: promedio de |y − ŷ|/(|y| + ε).
-- **C**: promedio sobre las operaciones de K_A·C_A/C_A_ref + K_L·C_L,op/C_L_ref,op + K_R·C_R,op,
-  si todas son `correcta`. Si no, C = P_fallo = 10.
-
-Los normalizadores son los congelados de `config/normalizacion.json`, medidos con la
-solución RL. Si una operación no está ahí, la evaluación de la referencia usa su propia
-medición; las siguientes necesitan `--normalizadores resultados/greedy/normalizacion.json`.
-
-Evalúe las tres operaciones con la misma configuración. No mezcle reportes de distintas mallas.
-
-## 6. Siguiente ronda de Greedy
-
-```bash
-python3 agente_greedy.py --salida resultados/greedy --evaluaciones resultados/prueba_001/evaluacion.json
-```
-
-Registra cada evaluación como la solución RL, con los mismos formatos:
-
-- `historial.jsonl`: solo se agregan líneas. Incluye estado, métricas, costo y la recompensa
-  r = C_best − C (−P_fallo si se penaliza). Todas las de un lote se miden contra el mejor
-  anterior al lote.
-- `optimas.json`: las correctas empatadas en el menor costo (`tolerancia_empate_costo`).
-- `resumen.json`: C_min, conteo por estado, porcentajes y evolución del costo.
-
-Además actualiza la cadena de mejoras (`cadena.json`, `mejor_cgra.json`) y propone vecinas
-de las mejores conocidas que pasan la validación previa. La primera evaluación debe ser la
-de la referencia; si no es correcta, la búsqueda se detiene.
-
-El presupuesto es el del RL (`config/agente.json`). `max_evaluaciones` no cuenta la
-referencia. `paciencia` cuenta las evaluaciones seguidas sin mejora; `error_infraestructura`
-no cuenta para ella. Las propuestas se recortan a las evaluaciones que quedan, y al agotarse
-`resumen.json → estado` dice por qué terminó.
-
-Puede proporcionar varios archivos después de `--evaluaciones`. Las propuestas todavía no
-evaluadas se conservan. Los nombres `config_*.json` se renumeran al actualizar propuestas:
-use carpetas distintas para los resultados de cada configuración y guarde una copia de su
-JSON antes de avanzar a la siguiente ronda. Para iniciar otra búsqueda o cambiar
-parámetros, use otra carpeta `--salida`.
+`dijkstra/NOTAS.md` explica los supuestos de hardware de Dijkstra y `dijkstra/ARCHIVOS_LL_DOT.md`,
+qué toma de los archivos `.ll` y `.dot`.

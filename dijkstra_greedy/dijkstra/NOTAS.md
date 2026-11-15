@@ -8,7 +8,7 @@ Recibe una configuración (un `FormatoCGRA`, la ruta de un `.json` o un dicciona
 
 | Paso | Qué hace | Estado si falla |
 |---|---|---|
-| Validación previa | Las reglas de `rl/agente/paquete.py`: filas 1–32, columnas 3–32, `M` en las columnas oeste y este, interior `E`/`V`/`C` (sin `G`), tipos e instrucciones iguales al esquema, memoria ≤ 4096, ancho 4 | `accion_invalida` |
+| Validación previa | Las reglas de `rl/agente/paquete.py`: filas 1–32, columnas 3–32, `M` en las columnas oeste y este, interior `E`/`V`, tipos e instrucciones iguales al esquema, memoria ≤ 4096, ancho 4 | `accion_invalida` |
 | Mapeo | Dijkstra, por operación | `fallo_evaluador` |
 | E03 | `validacion_programas.py`: las reglas de `rl/medicion/validacion_programas.py` (un archivo por PE, registros definidos antes de leerse, cada salida escrita una vez, encabezados) | `fallo_evaluador` |
 | Simulación | `cgra/src/run_cgra.py` (el simulador del RL) en otro proceso, con `t_max_simulacion_s` = 60. Ciclos y NOPs de `reporte_ciclos.txt`; memoria final con `--write-back` sobre una copia (`simulacion.py`) | `fallo_simulador` |
@@ -29,14 +29,13 @@ El resultado esperado es el grafo ejecutado en el orden del C sobre la memoria i
 
 La recompensa r = C_best − C (−P_fallo si se penaliza, con C_best,0 = C_ref) depende de la historia, así que la calcula Greedy al registrar la evaluación.
 
-API interna: `Evaluador().evaluar(configuracion)` devuelve una `Evaluacion` con `estado`, `costo`, `metricas` (C_A, C_L, C_R, C_A_norm, C_L_norm, ciclos, nops, fraccion_nops, capacidades) y `operaciones`. Los grafos se leen una vez y cada configuración ya evaluada se guarda. En la terminal, `src/evaluar_cgra.py` hace lo mismo desde los reportes JSON del simulador: consulte [Flujo por etapas](../../FLUJO_ETAPAS.md).
+API interna: `Evaluador().evaluar(configuracion)` devuelve una `Evaluacion` con `estado`, `costo`, `metricas` (C_A, C_L, C_R, C_A_norm, C_L_norm, ciclos, nops, fraccion_nops, capacidades) y `operaciones`. Los grafos se leen una vez y cada configuración ya evaluada se guarda. El ciclo agente-evaluador (`agente_greedy.py`) lo llama con cada configuración que propone Greedy.
 
-Sustituye los skills 04–07. Uso: `uv run mapear_dijkstra.py <operacion|todas> --filas F --columnas C [--salida DIR]` (o `--cgra` con una configuración de tamaño fijo);
-desde Python, `cargar_grafo()` una vez por operación y `evaluar_configuracion(grafo, formato)` por configuración.
+Dijkstra sustituye los skills 04–07. Desde Python, `cargar_grafo()` una vez por operación y `evaluar_configuracion(grafo, formato)` por configuración.
 
 | Supuesto del skill | Cómo quedó (según `malla.py`, `programa.py` e `isa.py` del simulador en `cgra/src/`) |
 |---|---|
-| Tipos MS/MV/CS/CV | Tipos reales de `cgra.json` (G, M, E, V, C). Compatibilidad: `compatibilidad.json` traduce la operación a una instrucción y se buscan los tipos que la tienen en `instrucciones`. Malla desde `FormatoCGRA` (`ciclo_filas` o `malla`). |
+| Tipos MS/MV/CS/CV | Tipos reales de `cgra.json` (M, E, V). Compatibilidad: `compatibilidad.json` traduce la operación a una instrucción y se buscan los tipos que la tienen en `instrucciones`. Malla desde `FormatoCGRA` (`ciclo_filas` o `malla`). |
 | Latencia 1 | Se mantiene. |
 | El vecino lee el resultado en t+1 | **Cambiado.** Pasar un dato a un vecino es `SEND` + `RECV` en el mismo ciclo y **ocupa los dos PEs**. El dato se usa en el receptor al ciclo siguiente. Por eso, en `M V V E`, el `add` queda en el ciclo 4, no en el 3. |
 | Relevo con `MOV` | Relevo con `RECV` y luego `SEND` (el `MOV` del ISA solo carga constantes). |
@@ -81,4 +80,4 @@ Los vectores usan los registros `v0`–`v7` (un banco aparte de los escalares) y
 
 ## Decisiones de evaluación
 
-Esta es la alternativa Dijkstra + Greedy del PDF. Para que se pueda comparar con la solución RL, comparte con ella la función de costo, los estados, las validaciones, la referencia, el presupuesto y el formato del registro (`solucion_rl.md`, sección 10). Antes usaba el error relativo con signo y costos sin normalizar; se cambió a lo del RL porque el contrato pide que solo cambien el agente y el generador de programas.
+Esta es la alternativa Dijkstra + Greedy del PDF. Para que se pueda comparar con la solución RL, comparte con ella las ecuaciones de costo, los estados, las validaciones, la referencia y el formato del registro (`solucion_rl.md`, sección 10). Antes usaba el error relativo con signo y costos sin normalizar; se cambió a lo del RL porque solo deben cambiar el agente y el generador de programas. El presupuesto no es el del RL: Greedy barre todos los tamaños (`config/agente.json`, `max_evaluaciones` y `paciencia` en `null`). Para reproducir el presupuesto de una corrida RL, basta con ponerlos en esos valores.

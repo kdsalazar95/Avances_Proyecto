@@ -3,7 +3,7 @@ Corre las pruebas de Dijkstra + Greedy (dijkstra_greedy/tests/) con la misma
 salida amigable que las del simulador (ResultadoAmigable de cgra/test/run_tests.py).
 
 Cómo correrlo, desde la raíz del repositorio:
-    uv run python3 dijkstra_greedy/tests/run_tests.py
+    python3 dijkstra_greedy/tests/run_tests.py
 """
 import importlib.util
 import os
@@ -14,7 +14,7 @@ sys.path.insert(0, _aqui)
 
 import test_dijkstra  # noqa: E402  (también pone cgra/src y dijkstra_greedy/ en sys.path)
 import test_agente  # noqa: E402
-import test_etapas  # noqa: E402
+import test_ciclo  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "run_tests_simulador", os.path.join(os.path.dirname(os.path.dirname(_aqui)), "cgra", "test", "run_tests.py"))
@@ -28,12 +28,12 @@ NOMBRES_DE_SECCION = {
     "TestVerificador": "Bloque Dijkstra: verificador",
     "TestVectorizacion": "Bloque Dijkstra: modo vectorial",
     "TestEvaluador": "Evaluador: costos de área, latencia y correctitud",
-    "TestAgenteGreedy": "Agente Greedy: cadena de mejoras determinística",
+    "TestAgenteGreedy": "Agente Greedy: camino por los PEs de menor peso",
     "TestAgenteConEvaluador": "Agente Greedy con el evaluador real",
-    "TestCompilarSkill02": "Agente Greedy: skill 02 (clang) dentro del flujo",
+    "TestCompilarSkill02": "Skills 02-03 (clang, opt) dentro del ciclo",
     "TestSimuladorDijkstra": "Bloque Dijkstra: PE*.txt en el simulador",
     "TestSimuladorOtrasOperaciones": "Bloque Dijkstra: otras operaciones en el simulador",
-    "TestEtapasSeparadas": "Etapas separadas: carpetas de evaluación y JSON",
+    "TestCicloCompleto": "Ciclo agente-evaluador: simulación, pesos y camino con el evaluador real",
 }
 
 
@@ -50,7 +50,7 @@ def main():
         test_agente.TestAgenteGreedy,
         test_agente.TestAgenteConEvaluador,
         test_agente.TestCompilarSkill02,
-        test_etapas.TestEtapasSeparadas,
+        test_ciclo.TestCicloCompleto,
     ], NOMBRES_DE_SECCION)
 
 

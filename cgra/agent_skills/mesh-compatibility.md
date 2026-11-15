@@ -1,50 +1,38 @@
 # Mesh Compatibility Contract
 
-This contract is shared by skills 01 and 05 to 09. It defines the intended
-support for small meshes and arbitrary explicit maps. The narrow-mesh policy
-still needs implementation in the shared Python map resolver and scheduler;
-editing these instructions alone does not add that runtime support. On every
-run, use the map and instruction lists actually returned by `FormatoCGRA`.
-Never compile for an imagined map that differs from the simulator's map.
-Report an unsupported layout separately from an impossible hardware mapping.
+This contract is shared by skills 01 and 05 to 09. It defines the support for
+small meshes and arbitrary explicit maps. On every run, use the map and
+instruction lists actually returned by `FormatoCGRA`. Never compile for an
+imagined map that differs from the simulator's map. Report an invalid or
+unsupported layout separately from an impossible hardware mapping.
+
+The only PE types are `M` (memoria), `E` (escalar) and `V` (vectorial). No PE
+both accesses memory and computes, and no PE does both scalar and vector
+arithmetic. Do not invent other types or silently add memory instructions to
+`E`/`V` or arithmetic instructions to `M`.
 
 ## Automatic Layout Policy
 
-Apply these cases in order when the shared resolver selects the adaptive
-automatic policy. Do not reinterpret an existing explicit `malla` or a concrete
-`distribucion` rule as an adaptive policy. The Python configuration interface
-for selecting that policy must be implemented before claiming automatic support.
+With `adaptar_mallas_pequenas` in `src/cgra.json` (and no explicit `malla`),
+`formato_cgra.malla_pequena()` applies these cases; otherwise the
+`distribucion` applies as declared.
 
 | Dimensions | Types and placement | Execution topology |
 |---|---|---|
-| `1x1` | `G` | local loads, arithmetic and stores on the same PE |
-| `Nx1`, `N >= 2` | `M` at row 0, `C` at rows 1 to N-1 | vertical shared memory server |
-| `Nx2`, `N >= 1` | each row is `M C` | one horizontal server/compute pair per row |
-| 1 or 2 rows, at least 3 columns | west/east `M`; every interior PE is `C` | two-server rows with 3 columns; nearest compatible border server and relays with more columns |
-| at least 3 rows and at least 3 columns | west/east `M`; interior rows cycle `E`, `V`, `C` | existing border layout, unchanged |
+| `1x1`, `2x1`, `1x2`, any single row | not valid: `FormatoCGRA` raises an error | none |
+| `Nx1`, `N >= 3` | `M` at row 0; rows 1 to N-1 rotate `E`, `V`, `E`... | vertical shared memory server |
+| `Nx2`, `N >= 2` | rows rotate `M E`, `M V`, `M E`... | one horizontal server/compute pair per row |
+| at least 2 rows and at least 3 columns | west/east `M`; interior rows rotate `E`, `V` | border layout from `distribucion` |
 
-Dimensions are always rows x columns. Apply the singleton, one-column and
-two-column cases before the row-count cases. In particular, 1x3 is `M C M`,
-2x3 has two `M C M` rows, and 1x4/2x4 have `M C C M` rows. Both 1x10 and
-2x10 keep memory at both ends and C throughout the interior. Do not use
-`M C C` for 2x3 under this policy. Only the narrow exceptions can omit the
-east memory column: Nx2 uses `M C`, Nx1 uses vertical M/C, and 1x1 uses G.
-Transposing a shape can change its assignment: 1x3 and 3x1 have different
-memory servers and routes.
-
-These special-case rules supplement the original normal-mesh rules; they do
-not replace the E/V/C rotation for meshes with at least 3 rows and 3 columns.
-C already combines E and V arithmetic. Use G only where both memory and
-compute capability are needed, notably the singleton, not to replace C in
-the small layouts. No new ISA instructions are implied.
-
-`G` is a generic PE, not a new instruction: it combines the scalar memory,
-arithmetic, movement and communication instructions. It may also have the
-vector ISA if `ancho_vector` exists. Without vector hardware, use scalar
-instructions only. If an explicit typed map names `G`, that type must be
-declared with its real instructions. Do not silently add memory instructions
-to `C` or arithmetic instructions to `M`. A configuration without `tipos_pe`
-already describes generic PEs; classify their capabilities in the same way.
+Dimensions are always rows x columns. A mesh needs at least two compute rows
+so it can hold both an `E` and a `V`; the invalid sizes are exactly those with
+a single compute row. Report them as an invalid configuration and do not
+generate PE files for them. Any map, automatic or explicit, that does not have
+at least one `E` and one `V` is also invalid, because the operations need both
+scalar and vector compute. Only the narrow exceptions omit the east memory
+column: Nx2 uses `M E`/`M V`, Nx1 uses vertical M, E, V.... Transposing a
+shape can change its assignment: 2x3 and 3x2 have different memory servers
+and routes.
 
 ## Capability Checks Before Mapping Work
 
@@ -61,14 +49,14 @@ Classify by allowed instructions, not solely by the letters or position:
   Reduction needs `ADD`; matmul/convolution need `MUL` and `ADD`.
 - Vector-capable: the vector operations used by the selected schedule, including
   `VREDSUM` or `VBCAST` when the schedule requires them.
-- A generic PE can belong to several sets simultaneously. Local computation
-  does not need `SEND/RECV` to itself.
+- The memory set (`M`) and the compute sets (`E`, `V`) never overlap, so every
+  operand and result travels with `SEND/RECV` or `VSEND/VRECV`.
 
 For each operation, establish all of the following before publishing a schedule:
 
 1. At least one PE can access the input and output regions.
 2. At least one PE can perform each required calculation.
-3. Operands and results have compatible routes, or remain local on a `G`.
+3. Operands and results have compatible routes.
 4. A complete reduction plan exists for all assigned partial sums.
 5. Every scalar remainder has an eligible scalar PE and a route.
 6. The initial memory fits `palabras_memoria`; tiling reuses PEs but does not
@@ -91,7 +79,7 @@ limitation. Do not request a larger mesh merely because execution takes tiles.
 | No required arithmetic | operation error, even on a large mesh |
 | Scalar-only compute PEs | schedule all work scalarly; do not emit vector arithmetic |
 | Vector-only compute PEs | full vectors only, with vector accumulation/reduction when needed |
-| Tail or output row shorter than W | use an eligible `E/C/G`, or run the whole operation scalarly if possible |
+| Tail or output row shorter than W | use an eligible `E`, or run the whole operation scalarly if possible |
 | Tail with no reachable scalar compute PE | operation error; never read past a bank or borrow lanes from the next output row |
 | No compatible vector route | find another vector PE/server/path, or fall back to scalar execution if feasible |
 | Initial memory too large | error with required and available word counts |
@@ -106,8 +94,8 @@ Build paths from north/south/east/west neighbors. Each scalar hop requires
 `SEND` on its sender and `RECV` on its receiver; vector hops require
 `VSEND/VRECV` at every endpoint and relay. Validate outbound and return paths.
 Use the nearest compatible server by path length; break ties by row-major PE
-order. A local memory-capable compute PE has path length zero. The existing
-two-server `M C M` optimization remains available when both routes are valid.
+order. The two-server `M E M` / `M V M` optimization remains available when
+both routes are valid.
 
 For example, `M E V` has a scalar path but no direct vector path through `E`.
 Do not claim that scalar relays alone can assemble a vector at the destination.
@@ -116,7 +104,7 @@ of requiring every compute PE to participate. Unused PEs may still relay.
 
 The border-layout reduction route in skill 06 is a specialization, not a
 universal requirement. In a column, reduce upward through compatible compute
-PEs and send the result to the memory at row 0. With `G` alone, store locally.
+PEs and send the result to the memory at row 0.
 With an arbitrary map, select a compatible reduction tree or gather partials
 at a reachable accumulator. A scalar tree needs `ADD` at its combining nodes;
 a `V` can relay scalars but cannot add them. A connected vector tree can instead
@@ -139,11 +127,11 @@ zero-width tile using `columnas - 2` for one- or two-column meshes.
   goes to vector PE `e mod P_v` in round `e // P_v`.
 - The rectangular scalar tile in skill 06 remains valid for the uniform
   border layout. Other layouts use explicit unit lists and round numbers.
-- A `C/G` shared between vector and scalar phases cannot execute both at
-  once. Schedule its remainder after its vector work, or reserve it for scalar
-  work before computing capacities. Never count the same PE twice in parallel.
-- If `P_v = 0`, use scalar work. If the scalar-only set is empty, use reachable
-  `C/G` for scalar work; never divide by zero or assign scalar arithmetic to V.
+- Scalar work goes only to `E` and vector work only to `V`. Never count the
+  same PE twice in parallel.
+- If `P_v = 0`, use scalar work on `E`. If there is no reachable `E` for the
+  scalar work, it is an operation error; never divide by zero or assign scalar
+  arithmetic to V.
 - Costs in the adjacent-pair tables are estimates for that topology only.
   Include server sharing and relay cycles when comparing other assignments.
 - Reset each output accumulator before its next output unit. In reduction,
@@ -153,15 +141,15 @@ zero-width tile using `columnas - 2` for one- or two-column meshes.
 
 ## Acceptance Cases for the Later Implementation
 
-Validate the three source operations with automatic layouts `1x1`, `1x2`,
-`2x1`, `1x3`, `3x1`, `2x2`, `3x2`, `1x4`, `2x3`, `2x4`, `1x10`, `2x10`,
-`3x4`, `4x3` and a normal wider mesh such as `6x10`. Check that 2x3 uses
-two M C M rows, narrow cases follow their own precedence, and normal meshes
-keep the original E/V/C row rotation. Cover both dimension orderings, exact and partial vector units,
+Validate the three source operations with automatic layouts `3x1`, `2x2`,
+`3x2`, `2x3`, `2x4`, `2x10`, `3x4`, `4x3` and a wider mesh such as `6x10`, and
+check that `1x1`, `2x1`, `1x2`, `1x3` and `1x10` are rejected as invalid. Check
+that 2x3 uses `M E M` / `M V M`, narrow cases follow their own precedence, and
+normal meshes keep the E/V row rotation. Cover both dimension orderings, exact and partial vector units,
 multiple tile rounds, inactive edge units and coordinate widths beyond one digit.
 Also cover explicit all-memory, all-compute, scalar-only, vector-only with/without
 tails, mixed rows with blocked vector routes, consecutive V reduction nodes,
-generic PEs, too-small memory and a valid route to output other than `PE00`.
+too-small memory and a valid route to output other than `PE00`.
 Check computed results, exact output coverage, accumulator lifetimes, instruction
 permissions, all transfers, memory bounds and complete regenerated PE files.
 These are acceptance requirements, not a claim that those tests have passed.

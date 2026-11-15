@@ -152,7 +152,7 @@ class FormatoCGRA:
             adaptar = datos.get(ADAPTAR, False)
             if type(adaptar) is not bool:
                 raise ValueError(f"'{ADAPTAR}' debe ser true o false")
-            pequena = malla_pequena(datos["filas"], datos["columnas"]) if adaptar else None
+            pequena = malla_pequena(datos["filas"], datos["columnas"]) if adaptar and "malla" not in datos else None
             if "malla" in datos:
                 malla = [fila.split() if isinstance(fila, str) else list(fila) for fila in datos["malla"]]
             elif pequena is not None:
@@ -195,50 +195,45 @@ def elegir_tamano(eje, declarado, pedido):
 def malla_pequena(filas, columnas):
     """Malla de una CGRA que no admite la 'distribucion' de bordes, o None si la admite.
 
-    Las filas de cómputo rotan escalar (E) y vectorial (V). C (escalar y
-    vectorial a la vez) solo se usa cuando hay una sola fila de cómputo, porque
-    no alcanzan las filas para poner E y V:
+    Las filas de cómputo rotan escalar (E) y vectorial (V). Una malla con una
+    sola fila de cómputo no alcanza para poner E y V, y no es válida:
 
-        1x1                          G
-        2x1                          M arriba, C debajo
+        1x1, 2x1, 1x2, 1 fila        no válida (ValueError)
         Nx1, N >= 3                  M arriba, E, V, E... debajo
-        1x2                          M C
         Nx2, N >= 2                  M E, M V, M E...
-        1 fila, 3+ columnas          M C ... C M
         2+ filas, 3+ columnas        None: se usa la 'distribucion' (M E..E M, M V..V M...)
     """
     def computo(cantidad_filas):
-        """Tipo de cómputo de cada fila: C si es la única; si no, E, V, E..."""
-        if cantidad_filas == 1:
-            return ["C"]
+        """Tipo de cómputo de cada fila: E, V, E..."""
+        if cantidad_filas < 2:
+            raise ValueError(
+                f"la malla {filas}x{columnas} no es válida: tiene una sola fila de cómputo y no alcanza "
+                "para poner escalar (E) y vectorial (V)"
+            )
         return ["E" if f % 2 == 0 else "V" for f in range(cantidad_filas)]
 
-    if filas == 1 and columnas == 1:
-        return [["G"]]
     if columnas == 1:
         return [["M"]] + [[letra] for letra in computo(filas - 1)]
-    if columnas == 2:
-        return [["M", letra] for letra in computo(filas)]
-    if filas == 1:
-        return [["M"] + ["C"] * (columnas - 2) + ["M"]]
+    if columnas == 2 or filas == 1:
+        letras = computo(filas)  # con una sola fila falla
+        return [["M", letra] for letra in letras]
     return None
 
 
 def generar_malla(filas, columnas, distribucion):
     """Genera una cuadrícula de tipos usando reglas para bordes y resto.
 
-    ``distribucion`` es una regla (``{"oeste": "M", "este": "M", "resto": "C"}``),
+    ``distribucion`` es una regla (``{"oeste": "M", "este": "M", "resto": "E"}``),
     una regla por paridad de fila, para alternar filas de tipos distintos:
 
         {"filas_pares":   {"oeste": "M", "este": "M", "resto": "E"},
-         "filas_impares": {"oeste": "M", "este": "M", "resto": "C"}}
+         "filas_impares": {"oeste": "M", "este": "M", "resto": "V"}}
 
     o un ciclo de reglas que se repite fila por fila (la fila f usa la regla
     f mod la cantidad de reglas):
 
         {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": "E"},
-                         {"oeste": "M", "este": "M", "resto": "V"},
-                         {"oeste": "M", "este": "M", "resto": "C"}]}
+                         {"oeste": "M", "este": "M", "resto": "V"}]}
     """
     if CICLO in distribucion:
         if len(distribucion) != 1:

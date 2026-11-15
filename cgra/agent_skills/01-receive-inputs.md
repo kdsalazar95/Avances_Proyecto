@@ -8,19 +8,15 @@ files disagree.
 
 ## Reading the Configuration
 
-Read the [Mesh Compatibility Contract](mesh-compatibility.md) first. Positive
-one- and two-column meshes are valid target sizes under its layout policy;
-they need capability/routing checks, not an unconditional minimum of 3 columns.
-The automatic small-layout resolver is a pending Python implementation: its
-absence is an implementation limitation, not proof that those sizes are invalid.
-
-For special layouts, apply cases in order: 1x1 uses G; Nx1 (N >= 2) uses
-M at row 0 and C below; Nx2 uses M C in every row; one/two-row meshes with
-at least 3 columns keep M at both ends and use C at every interior position.
-For example, 2x3 is M C M in both rows. Only meshes with at least 3 rows and
-3 columns use the original E/V/C row rotation below. This is an exception
-policy, not a change to the original normal-mesh instructions. Always match
-the actual configured map before generating any PE programs.
+Read the [Mesh Compatibility Contract](mesh-compatibility.md) first. The only
+PE types are `M`, `E` and `V`. With `adaptar_mallas_pequenas`, Nx1 (N >= 3)
+uses M at row 0 and E, V, E... below, and Nx2 (N >= 2) uses M E, M V... rows;
+meshes with at least 2 rows and 3 columns use the E/V row rotation below.
+1x1, 2x1, 1x2 and every single-row mesh are **not valid**: they do not have
+two compute rows for an E and a V, and `FormatoCGRA` rejects them. Report the
+size as invalid and do not compile for it. A map (including an explicit
+`malla`) without at least one `E` and one `V` is invalid too. Always match the actual configured
+map before generating any PE programs.
 
 `src/cgra.json` describes the CGRA, so it does not have to be repeated in every
 request. The same file is read by `run_cgra.py` (`src/formato_cgra.py`), so the
@@ -38,14 +34,13 @@ user, or the Greedy agent). A file looks like this:
   "tipos_pe": {
     "M": {"nombre": "memoria",   "instrucciones": ["NOP", "MOV", "LD", "ST", "SEND", "RECV", "VLD", "VST", "VSEND", "VRECV"]},
     "E": {"nombre": "escalar",   "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV"]},
-    "V": {"nombre": "vectorial", "instrucciones": ["NOP", "MOV", "SEND", "RECV", "VADD", "...", "VSEND", "VRECV"]},
-    "C": {"nombre": "computo",   "instrucciones": ["NOP", "MOV", "ADD", "...", "VADD", "...", "VSEND", "VRECV"]}
+    "V": {"nombre": "vectorial", "instrucciones": ["NOP", "MOV", "SEND", "RECV", "VADD", "...", "VSEND", "VRECV"]}
   },
+  "adaptar_mallas_pequenas": true,
   "distribucion": {
     "ciclo_filas": [
       {"oeste": "M", "este": "M", "resto": "E"},
-      {"oeste": "M", "este": "M", "resto": "V"},
-      {"oeste": "M", "este": "M", "resto": "C"}
+      {"oeste": "M", "este": "M", "resto": "V"}
     ]
   }
 }
@@ -73,33 +68,31 @@ user, or the Greedy agent). A file looks like this:
 
    A PE never executes an instruction outside its type; `run_cgra.py` refuses
    to load a program that does.
-   For adaptive automatic layouts, use the cases in the compatibility contract
-   only when the shared resolver returns that map. Explicit `malla` takes
-   precedence; existing concrete distributions keep their declared meaning.
-3. Classify PEs into potentially overlapping **memory-capable** and
-   **compute-capable** sets from their allowed instructions. A `G` belongs to
-   both sets; it does not send data to itself. In the standard border layout,
+   If the command fails because the size is not valid (1x1, 2x1, 1x2 or a
+   single row), stop for this size and report it; do not build a map by hand.
+   Explicit `malla` takes precedence over `adaptar_mallas_pequenas` and
+   `distribucion`.
+3. Classify PEs into **memory** and **compute** sets from their allowed
+   instructions; the two sets never overlap. In the standard border layout,
    the west and east columns are
    only memory PEs (`M`), which read and write the data memory, scalars and
    vectors, and send data to their neighbors; every other PE is a compute PE,
    which only executes instructions and never touches memory. A compute PE is
-   **scalar** if its type has `ADD`..`DIV`, **vector** if it has
-   `VADD`..`VBCAST`, or both. With `ciclo_filas` the rows repeat its rules in
+   **scalar** (`E`) if its type has `ADD`..`DIV`, or **vector** (`V`) if it has
+   `VADD`..`VBCAST`; never both. With `ciclo_filas` the rows repeat its rules in
    order (row `f` takes rule `f mod` their count); the default rotates
-   `escalar`, `vectorial`, `computo`:
+   `escalar`, `vectorial`:
 
    ```text
    memory PEs:   PE(f, 0) and PE(f, columnas - 1), for every row f
    compute PEs:  PE(f, c) with 1 <= c <= columnas - 2
-   f mod 3 = 0:  M E E ... E M
-   f mod 3 = 1:  M V V ... V M
-   f mod 3 = 2:  M C C ... C M
+   f mod 2 = 0:  M E E ... E M
+   f mod 2 = 1:  M V V ... V M
 
    M (memoria):   NOP, MOV, LD, ST, VLD, VST, SEND, RECV, VSEND, VRECV  -> moves data, never computes
    E (escalar):   NOP, MOV, ADD, SUB, MUL, DIV, SEND, RECV             -> scalar arithmetic only
    V (vectorial): NOP, MOV, SEND, RECV, VADD, VSUB, VMUL, VDIV,
                   VREDSUM, VBCAST, VSEND, VRECV                        -> vector arithmetic only
-   C (computo):   E + V                                                -> scalar and vector
    ```
 
    `V` keeps `SEND`/`RECV` only to move the scalars of `VREDSUM`/`VBCAST`
@@ -111,15 +104,14 @@ user, or the Greedy agent). A file looks like this:
    Use the map printed by the command above as the picture of the CGRA for this
    run; the later skills apply their rules to it.
 
-   If the file has no `tipos_pe`, every PE is generic and runs the whole ISA.
-   Use the compatible topology from the contract, including local execution
-   for `1x1`. Do not impose two memory borders on a one- or two-column mesh.
+   `src/cgra.json` must declare `tipos_pe` with `M`, `E` and `V`. Do not impose
+   two memory borders on a one- or two-column mesh.
 4. Read `palabras_memoria`: the size of the data memory, in words. The
    `memoria.bin` of the program must fit in it.
 5. Decide the **mode** per operation. It is `vectorial` when the file has
    `ancho_vector` (`W`, the words of every vector register) **and** the map has
-   compatible vector compute PEs (`V`, `C` or `G`) with valid local accesses or
-   complete operand/result routes to memory-capable PEs, with the vector
+   vector compute PEs (`V`) with complete operand/result routes to memory PEs,
+   with the vector
    instructions the vector schedules use:
 
    ```text
@@ -127,12 +119,10 @@ user, or the Greedy agent). A file looks like this:
    vector compute PEs:      VADD, VMUL, VREDSUM, VBCAST, VSEND, VRECV
    ```
 
-   Otherwise select `escalar` if scalar execution is feasible. A single row
-   does not imply scalar mode: `M C M` or a vector-capable `G` can vectorize.
-   Check the operation's arithmetic, scalar remainders and final reduction
-   before selecting a mode. `E/C/G` may run scalar work; `V` cannot. Assign
-   distinct resources to concurrent work, or serialize scalar/vector phases
-   on a shared `C/G`. Do not use an empty resource set in a division/modulo.
+   Otherwise select `escalar` if scalar execution is feasible. Check the
+   operation's arithmetic, scalar remainders and final reduction before
+   selecting a mode. Only `E` may run scalar work and only `V` vector work.
+   Do not use an empty resource set in a division/modulo.
    State the mode, W, topology and any scalar fallback in the mesh summary.
 6. Treat those values as authoritative and continue without asking, even when
    the mesh does not match the size of the program: a larger mesh leaves its
@@ -230,7 +220,7 @@ The mesh and the problem do **not** have to match:
    every PE file and removes obsolete generated PE files.
 5. Record the mesh size and the type map read from `cgra.json`. Pass them to
    every later skill; do not hard-code a size or a type map downstream.
-6. Eligible compute PEs own work, including `G` when it also accesses memory.
+6. Eligible compute PEs (`E` and `V`) own work.
    Record explicit work lists and tile rounds. Only the standard rectangular
    scalar border layout uses `tile_filas = filas`, `tile_columnas = columnas - 2`.
    Other topologies use eligible-list tiling; never construct zero/negative
@@ -256,18 +246,17 @@ mesh_filas=<int, from cgra.json>
 mesh_columnas=<int, from cgra.json>
 palabras_memoria=<int, from cgra.json>
 malla=<one row per line, e.g. M E E M>
-topologia=<local | columna | parejas | bordes | explicita>
-memory_pes=<all memory-capable PE ids, including G>
-compute_pes=<all compute-capable PE ids, including G; may overlap memory_pes>
+topologia=<columna | parejas | bordes | explicita>
+memory_pes=<all M PE ids>
+compute_pes=<all E and V PE ids>
 eligible_compute_pes=<selected PEs with complete operand/result/reduction routes>
 vector_compute_pes=<PEs assigned vector work, row-major>
-scalar_only_pes=<eligible E-like PEs>
-scalar_capable_pes=<all eligible E/C/G-like PEs>
-scalar_compute_pes=<PEs assigned scalar work, with phases if shared with vectors>
+scalar_capable_pes=<all eligible E PEs>
+scalar_compute_pes=<E PEs assigned scalar work>
 tile_filas=<positive int for rectangular scalar tiling, otherwise not applicable>
 tile_columnas=<positive int for rectangular scalar tiling, otherwise not applicable>
 tile_plan=<ordered work units, owner PE, scalar/vector phase and round>
-servers=<local PE or compatible memory PE(s) per selected compute PE>
+servers=<compatible memory PE(s) per selected compute PE>
 routes=<operand/result paths, scalar/vector transfer type, relay scratch registers>
 reduction_plan=<partial representation, combining root, paths; or local only>
 output_pe=<actual compatible memory-capable output PE>

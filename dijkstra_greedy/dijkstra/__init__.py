@@ -19,7 +19,7 @@ Partes:
 * ``verificador``  revisión independiente del mapeo
 * ``salida``       PE*.txt (formato del skill 08) y corrida en el simulador
 * ``evaluador``    el Evaluador del ciclo agente Greedy <-> evaluador: C_A, C_L, C_R y C
-* ``agente``       el agente Greedy (cadena de mejoras determinística) que usa el evaluador
+* ``agente``       el agente Greedy (camino por los PEs de menor peso) que usa el evaluador
 """
 
 import sys

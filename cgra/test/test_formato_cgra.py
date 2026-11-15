@@ -150,22 +150,25 @@ class TestFormatoCGRA(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mezcla"):
             generar_malla(2, 3, {**ciclo, "resto": "C"})
 
-    def test_10b_mallas_pequenas_usan_c_solo_con_una_fila_de_computo(self):
-        """Con 'adaptar_mallas_pequenas', C debe aparecer solo cuando hay una única fila de cómputo (no alcanzan para E y V); con dos o más, las filas de cómputo rotan E, V (G en 1x1). Desde 2 filas y 3 columnas se usa la 'distribucion' tal cual, y 'malla' explícita sigue mandando."""
-        tipos = {**TIPOS, "G": {"nombre": "generico", "instrucciones": ["NOP", "LD", "ST", "ADD"]},
-                 "E": {"nombre": "escalar", "instrucciones": ["NOP", "ADD"]},
+    def test_10b_mallas_pequenas_sin_dos_filas_de_computo_no_son_validas(self):
+        """Con 'adaptar_mallas_pequenas', las filas de cómputo rotan E, V; 1x1, 2x1, 1x2 y las mallas de una sola fila no tienen filas para E y V y deben rechazarse. Desde 2 filas y 3 columnas se usa la 'distribucion' tal cual, y 'malla' explícita sigue mandando."""
+        tipos = {"M": TIPOS["M"], "E": {"nombre": "escalar", "instrucciones": ["NOP", "ADD"]},
                  "V": {"nombre": "vectorial", "instrucciones": ["NOP"]}}
         ciclo = {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": letra} for letra in "EV"]}
         casos = {
-            (1, 1): ["G"], (2, 1): ["M", "C"], (3, 1): ["M", "E", "V"], (4, 1): ["M", "E", "V", "E"],
-            (1, 2): ["M C"], (2, 2): ["M E", "M V"], (3, 2): ["M E", "M V", "M E"],
-            (1, 3): ["M C M"], (1, 5): ["M C C C M"], (2, 3): ["M E M", "M V M"],
+            (3, 1): ["M", "E", "V"], (4, 1): ["M", "E", "V", "E"],
+            (2, 2): ["M E", "M V"], (3, 2): ["M E", "M V", "M E"], (2, 3): ["M E M", "M V M"],
             (2, 5): ["M E E E M", "M V V V M"], (3, 3): ["M E M", "M V M", "M E M"],
         }
         for (filas, columnas), mapa in casos.items():
             ruta = self.escribir_json(filas=filas, columnas=columnas, tipos_pe=tipos, distribucion=ciclo,
                                       adaptar_mallas_pequenas=True)
             self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), mapa, f"{filas}x{columnas}")
+        for filas, columnas in ((1, 1), (2, 1), (1, 2), (1, 3), (1, 5)):
+            ruta = self.escribir_json(filas=filas, columnas=columnas, tipos_pe=tipos, distribucion=ciclo,
+                                      adaptar_mallas_pequenas=True)
+            with self.assertRaisesRegex(ValueError, f"{filas}x{columnas} no es válida"):
+                FormatoCGRA.cargar(ruta)
         ruta = self.escribir_json(filas=1, columnas=3, tipos_pe=tipos, distribucion=ciclo)
         self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M E M"])
         ruta = self.escribir_json(filas=1, columnas=3, tipos_pe=tipos, distribucion=ciclo,
@@ -176,18 +179,18 @@ class TestFormatoCGRA(unittest.TestCase):
             FormatoCGRA.cargar(ruta)
 
     def test_11_cada_tipo_de_src_cgra_json_ejecuta_solo_lo_suyo(self):
-        """En src/cgra.json, M solo debe acceder a memoria, E solo hacer aritmética escalar, V solo vectorial y C ambas; lo demás debe rechazarse. Con 3x3 hay M, E y V; C aparece con una sola fila (1x3)."""
+        """En src/cgra.json solo hay M, E y V: M solo debe acceder a memoria, E solo hacer aritmética escalar y V solo vectorial; lo demás debe rechazarse. Una malla de una sola fila (1x3) no es válida."""
         letras = {}
-        for filas, columnas in ((3, 3), (1, 3)):
-            formato = FormatoCGRA.cargar(filas=filas, columnas=columnas)
-            for pe in Malla(formato.filas, formato.columnas).ids():
-                letras.setdefault(formato.letra(pe), (pe, formato))
-        self.assertNotIn("C", " ".join(FormatoCGRA.cargar(filas=3, columnas=3).mapa()))
+        formato = FormatoCGRA.cargar(filas=3, columnas=3)
+        for pe in Malla(formato.filas, formato.columnas).ids():
+            letras.setdefault(formato.letra(pe), (pe, formato))
+        self.assertEqual(set(formato.tipos_pe), {"M", "E", "V"})
+        with self.assertRaisesRegex(ValueError, "no es válida"):
+            FormatoCGRA.cargar(filas=1, columnas=3)
         casos = {
             "M": (["LD rA, a[0]", "VLD v0, a[0]"], ["ADD rA, rA, rB", "VADD v0, v0, v1"]),
             "E": (["ADD rA, rA, rB"], ["VADD v0, v0, v1", "VSEND east, v0", "LD rA, a[0]"]),
             "V": (["VADD v0, v0, v1", "VREDSUM rC, v2", "SEND west, rC"], ["ADD rA, rA, rB", "LD rA, a[0]"]),
-            "C": (["ADD rA, rA, rB", "VADD v0, v0, v1", "VREDSUM rC, v2"], ["VLD v0, a[0]"]),
         }
         self.assertEqual(set(letras), set(casos))
         for letra, (aceptadas, rechazadas) in casos.items():

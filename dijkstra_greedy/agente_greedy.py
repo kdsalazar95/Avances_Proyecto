@@ -1,279 +1,164 @@
-"""Etapa Greedy por rondas: leer evaluaciones y proponer configuraciones.
+"""Ciclo agente Greedy <-> evaluador (solución Dijkstra + Greedy).
 
-No compila, mapea, simula ni calcula costos. Sin --evaluaciones propone la
-referencia (costos.json → referencia). En las siguientes invocaciones lee las
-evaluaciones de evaluar_cgra.py, las registra como el RL (historial.jsonl,
-optimas.json, resumen.json, con recompensa r = C_best − C), actualiza la cadena
-de mejoras y exporta las vecinas pendientes de las mejores, sin pasar del
-presupuesto (max_evaluaciones y paciencia de agente.json).
+    evaluador     --reporte de ciclos de cada PE (simulador)--> pesos de los PEs
+    agente Greedy --camino por los PEs de menor peso----------> PEs de la configuración
+
+El evaluador, por cada operación de operaciones.c:
+
+    skills 01-03  cgra.json, operaciones.ll + memoria.bin (clang-18) y grafos .dot (opt-18)
+    Dijkstra      sustituye los skills 04-07: grafo, compatibilidad por tipo de PE, mapeo y ciclos
+    skills 08-09  PE*.txt y su validación (E03)
+    simulador     cgra/src/run_cgra.py: reporte de ciclos (por PE) y memoria final
+    costos        C_A, C_L, C_R y C con las mismas ecuaciones de la solución RL (contrato.py)
+
+Greedy (dijkstra/agente.py): el grafo es la malla (por defecto 32x32, malla en
+config/agente.json); cada vértice es un PE y cada arista la conexión con un vecino norte,
+sur, este u oeste. Peso de un PE = w_tipo · (1 + NOPs/ciclos), con w_tipo de los pesos
+w1-w4 de costos.json y NOPs y ciclos del reporte de ciclos. La malla se simula una vez;
+después el camino empieza en PE00 y elige el siguiente PE con una política epsilon-greedy
+(epsilon y semilla en config/agente.json): con probabilidad epsilon un vecino sin visitar
+al azar, si no el de menor peso. Termina cuando el PE actual no tiene vecinos sin visitar.
+
+    python3 agente_greedy.py [--salida resultados/greedy]
+    python3 agente_greedy.py --continuar --salida resultados/greedy   # reusa la simulación guardada
+
+Resultados en --salida:
+
+    evaluacion_malla.json  la evaluación de la malla: C, costos por operación y NOPs por PE
+    pesos.json             el peso de cada PE y los datos con que se calculó
+    camino.json            los PEs del camino en orden, con su tipo y peso, el mapa ('.' = fuera) y su
+                           valuación con la función de costo (C, C_A, C_L, C_R), sin volver a simular
+    resumen.json           malla, inicio, PEs del camino por tipo, peso total, C del camino y tiempo
 """
 import argparse
 import json
-import math
+import sys
+import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dijkstra import RUTA_CGRA_JSON, leer_cgra
-from dijkstra.agente import Agente, Parametros, RUTA_PARAMETROS, clave
-from dijkstra.contrato import (CORRECTA, FORMULA_RECOMPENSA, NO_ATRIBUIBLES, PENALIZADOS, RUTA_COSTOS, Costos,
-                               actualizar_optimas, hash_configuracion, recompensa, verificar_penalizacion)
-from dijkstra.evaluador import Evaluador
+from dijkstra import CARPETA_PROGRAMAS, RUTA_CGRA_JSON, leer_cgra
+from dijkstra import operaciones as operaciones_del_c
+from dijkstra.agente import Agente, Parametros, RUTA_PARAMETROS, medir_en_paralelo
+from dijkstra.compilar import ErrorCompilacion, preparar
+from dijkstra.contrato import RUTA_COSTOS, Costos
+from dijkstra.evaluador import Evaluacion, EvaluacionOperacion
 
-CAMPOS_METRICAS = ("C_A", "C_L", "C_R", "C_A_norm", "C_L_norm", "ciclos", "nops", "fraccion_nops", "capacidades")
+ARCHIVO_EVALUACION = "evaluacion_malla.json"
 
 
 def _ahora():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _sin_normalizadores(criterio):
-    return {k: v for k, v in criterio.items() if k != "normalizadores"}
+def _escribir_json(ruta, datos):
+    temporal = ruta.with_suffix(ruta.suffix + ".tmp")
+    temporal.write_text(json.dumps(datos, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    temporal.replace(ruta)
 
 
-def entrada_historial(dato, id_evaluacion, iteracion, ronda, r, c_best_prev, costos, es_referencia):
-    """Una línea de historial.jsonl con los campos del reporte E08 del RL (rl/formatos.md)."""
-    e = dato["evaluacion"]
-    configuracion = dato["configuracion"]
-    h = hash_configuracion(configuracion)
-    por_operacion = {
-        op: {"estado": o["estado"], "costo": o["costo"], "ciclos": o["ciclos"], "nops": o["nops"],
-             "fraccion_nops": o["fraccion_nops"], "C_L": o["C_L"], "nops_por_pe": None,
-             "C_L_norm": o["C_L_norm"], "C_R": o["C_R"], "intentos_skills": None, "modo": o["modo"]}
-        for op, o in e["operaciones"].items()}
-    validaciones = {op: o["validacion"] for op, o in e["operaciones"].items()}
-    return {
-        "id_evaluacion": id_evaluacion,
-        "accion": {"id_candidata": id_evaluacion, "directorio": None, "configuracion": configuracion,
-                   "hashes": {"cgra.json": h}, "hash_accion": h},
-        "estado_evaluacion": e["estado"],
-        "metricas": {k: e["metricas"].get(k) for k in CAMPOS_METRICAS},
-        "costo_total": e["costo"],
-        "costo_penalizado": e["estado"] in PENALIZADOS,
-        "recompensa": r,
-        "detalle_recompensa": {"formula": "referencia: C_best_0 = C_ref" if es_referencia else FORMULA_RECOMPENSA,
-                               "C_best_prev": c_best_prev, "P_fallo": costos.p_fallo},
-        "validacion_funcional": {"aprobada": all((v or {}).get("aprobada") for v in validaciones.values()),
-                                 "por_operacion": validaciones},
-        "errores": e["errores"],
-        "avisos": [],
-        "tiempo_evaluacion_s": None,
-        "parametros": costos.parametros_usados(e["normalizadores"]),
-        "programas_generados": None,
-        "por_operacion": por_operacion,
-        "es_referencia": es_referencia,
-        "iteracion": iteracion,
-        "ronda": ronda,
-        "marca_tiempo": _ahora(),
-        "duplicada_de": None,
-        "malla": e["mapa"],
-    }
+def leer_evaluacion(ruta, configuracion):
+    """La evaluación guardada de la malla, si es de esta misma configuración; si no, ``None``."""
+    if not ruta.exists():
+        return None
+    datos = json.loads(ruta.read_text(encoding="utf-8"))
+    if datos.get("configuracion") != configuracion:
+        return None
+    e = datos["evaluacion"]
+    e["operaciones"] = {op: EvaluacionOperacion(**o) for op, o in e["operaciones"].items()}
+    return Evaluacion(**e)
 
 
-def reconstruir(historial, tolerancia):
-    """Óptimas, C_min y evaluaciones seguidas sin mejora (rl/agente/memoria.py)."""
-    optimas, c_min, sin_mejora = [], None, 0
-    for entrada in historial:
-        optimas, c_min, mejora = actualizar_optimas(optimas, entrada, tolerancia)
-        if not entrada["es_referencia"] and entrada["estado_evaluacion"] not in NO_ATRIBUIBLES:
-            sin_mejora = 0 if mejora else sin_mejora + 1
-    return optimas, c_min, sin_mejora
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--salida", default=Path("resultados/greedy"), type=Path,
+                        help="Carpeta de resultados (por defecto resultados/greedy)")
+    parser.add_argument("--parametros", default=RUTA_PARAMETROS, help="Parámetros del agente (config/agente.json)")
+    parser.add_argument("--costos", default=RUTA_COSTOS, help="Ecuaciones y pesos w1-w4 (config/costos.json)")
+    parser.add_argument("--cgra", default=RUTA_CGRA_JSON, help="Esquema de la CGRA (cgra/src/cgra.json)")
+    parser.add_argument("--procesos", type=int, help="Procesos para simular las operaciones en paralelo")
+    parser.add_argument("--forzar-compilacion", action="store_true", help="Repetir los skills 02-03")
+    parser.add_argument("--continuar", action="store_true",
+                        help="Reusar la simulación de la malla guardada en --salida (si es la misma malla)")
+    args = parser.parse_args(argv)
 
-
-def avanzar(base, parametros, estado, nuevas, costos=None):
-    """Registra ``nuevas`` (salidas de evaluar_cgra.py) y propone la siguiente ronda.
-
-    Devuelve ``(estado, propuestas, entradas_nuevas_del_historial)``."""
-    costos = costos or Costos.cargar()
-    agente = Agente(None, base, parametros, costos=costos)
-    referencia = agente.referencia()
-    clave_ref = clave(referencia)
-    evaluaciones = dict(estado.get("evaluaciones", {}))
-    historial = list(estado.get("historial", []))
-    criterio = estado.get("criterio")
-    normalizadores = estado.get("normalizadores")
-    ronda = estado.get("ronda", 0)
-    esperado = _sin_normalizadores(costos.criterio(None))
-    optimas, c_min, _ = reconstruir(historial, costos.tolerancia_empate)
-    c_best_prev = c_min  # todo el lote se mide contra el mejor anterior al lote
-    nuevas_entradas = []
-    for dato in nuevas:
-        if _sin_normalizadores(dato["criterio"]) != esperado:
-            raise ValueError("La evaluación usa pesos, K, tolerancias o fórmulas distintos de costos.json")
-        if criterio is not None and _sin_normalizadores(dato["criterio"]) != criterio:
-            raise ValueError("No mezcle evaluaciones con pesos o medidas de costo diferentes")
-        criterio = _sin_normalizadores(dato["criterio"])
-        usados = dato["evaluacion"]["normalizadores"]
-        if usados is not None:
-            if normalizadores is not None and usados != normalizadores:
-                raise ValueError("La evaluación usa otros normalizadores; pase --normalizadores "
-                                 "con el normalizacion.json de esta búsqueda")
-            normalizadores = normalizadores or usados
-        formato = Evaluador.formato(dato["configuracion"])
-        malla = tuple(tuple(f) for f in formato.malla)
-        # Greedy no explora cambios de memoria, ISA ni ancho vectorial.
-        canonica = Evaluador.formato(agente.configuracion(malla))
-        if Evaluador._clave(formato) != Evaluador._clave(canonica):
-            raise ValueError("La evaluación usa hardware distinto del espacio de diseño")
-        k = clave(malla)
-        if not historial and not nuevas_entradas and k != clave_ref:
-            raise ValueError("La primera evaluación debe ser la de la referencia "
-                             f"({' / '.join(costos.referencia)}): C_best,0 = C_ref")
-        if k in evaluaciones:
-            if evaluaciones[k] != dato:
-                raise ValueError(f"La configuración {k} ya tiene otra evaluación; use otra carpeta de salida")
-            continue
-        e = dato["evaluacion"]
-        if e["costo"] is None and e["estado"] not in NO_ATRIBUIBLES:
-            raise ValueError(f"{k}: solo error_infraestructura puede no tener costo")
-        if e["costo"] is not None and not math.isfinite(e["costo"]):
-            raise ValueError("Greedy requiere costos finitos")
-        es_referencia = k == clave_ref
-        if es_referencia:
-            r = 0.0 if e["estado"] == CORRECTA else recompensa(e["estado"], e["costo"], None, costos.p_fallo)
-        else:
-            r = recompensa(e["estado"], e["costo"], c_best_prev, costos.p_fallo)
-        iteracion = len(historial)
-        id_evaluacion = "referencia" if es_referencia else f"it-{iteracion:04d}"
-        entrada = entrada_historial(dato, id_evaluacion, iteracion, ronda, r,
-                                    None if es_referencia else c_best_prev, costos, es_referencia)
-        historial.append(entrada)
-        nuevas_entradas.append(entrada)
-        evaluaciones[k] = dato
-        if es_referencia and e["estado"] == CORRECTA:
-            c_best_prev = e["costo"]
-    if nuevas_entradas:
-        ronda += 1
-
-    # Cadena de mejoras (regla de Greedy): cada válida con C ≤ el último de la cadena entra.
-    cadena, umbral = [], float("inf")
-    for k, dato in evaluaciones.items():
-        e = dato["evaluacion"]
-        if e["estado"] == CORRECTA and e["costo"] <= umbral:
-            cadena.append(k)
-            umbral = e["costo"]
-
-    optimas, c_min, sin_mejora = reconstruir(historial, costos.tolerancia_empate)
-    hechas = sum(not h["es_referencia"] for h in historial)
-    ref = next((h for h in historial if h["es_referencia"]), None)
-    terminada = None
-    if ref is not None and ref["estado_evaluacion"] != CORRECTA:
-        terminada = "detenida: referencia no válida"
-    elif parametros.max_evaluaciones is not None and hechas >= parametros.max_evaluaciones:
-        terminada = "terminada: max_evaluaciones"
-    elif parametros.paciencia is not None and sin_mejora >= parametros.paciencia:
-        terminada = "terminada: paciencia"
-
-    propuestas = [tuple(tuple(f.split()) for f in c["malla"]) for c in estado.get("pendientes", [])]
-    if not evaluaciones:
-        propuestas = [referencia]
-    elif terminada is None:
-        for k, dato in evaluaciones.items():
-            e = dato["evaluacion"]
-            if e["estado"] == CORRECTA and e["costo"] == umbral:
-                f = Evaluador.formato(dato["configuracion"])
-                propuestas.extend(agente.vecinas(tuple(tuple(fila) for fila in f.malla)))
-    propuestas = [m for m in dict.fromkeys(propuestas)
-                  if clave(m) not in evaluaciones and not agente.motivo_invalida(m)]
-    if terminada is not None:
-        propuestas = []
-    elif evaluaciones and parametros.max_evaluaciones is not None:
-        propuestas = propuestas[:max(parametros.max_evaluaciones - hechas, 0)]
-    if evaluaciones and not propuestas and terminada is None:
-        terminada = "terminada: sin vecinas por explorar"
-
-    configuraciones = [agente.configuracion(m) for m in propuestas]
-    estado = dict(evaluaciones=evaluaciones, historial=historial, criterio=criterio, normalizadores=normalizadores,
-                  cadena=cadena, ronda=ronda, base=base, parametros=vars(parametros), pendientes=configuraciones,
-                  estado_corrida=terminada or "en_curso", optimas=optimas, C_min=c_min,
-                  iteraciones_sin_mejora=sin_mejora)
-    return estado, configuraciones, nuevas_entradas
-
-
-def resumen(estado, costos):
-    """``resumen.json`` con los campos del RL (rl/agente/ciclo.py)."""
-    entradas = estado["historial"]
-    agente = [e for e in entradas if not e["es_referencia"]]
-    correctos = [e["costo_total"] for e in entradas if e["estado_evaluacion"] == CORRECTA]
-    validas = [e for e in agente if e["estado_evaluacion"] != "accion_invalida"]
-    conteo = {}
-    for e in entradas:
-        conteo[e["estado_evaluacion"]] = conteo.get(e["estado_evaluacion"], 0) + 1
-    referencia = next((e for e in entradas if e["es_referencia"]), None)
-    return {
-        "id": "dijkstra-greedy",
-        "estado": estado["estado_corrida"],
-        "actualizado": _ahora(),
-        "C_min": estado["C_min"],
-        "optimas": [o["id_candidata"] for o in estado["optimas"]],
-        "evaluaciones": len(entradas),
-        "evaluaciones_agente": len(agente),
-        "iteraciones_sin_mejora": estado["iteraciones_sin_mejora"],
-        "conteo_por_estado": conteo,
-        "porcentaje_validas": round(100 * len(validas) / len(agente), 1) if agente else None,
-        "porcentaje_correctas": round(100 * sum(e["estado_evaluacion"] == CORRECTA for e in agente)
-                                      / len(agente), 1) if agente else None,
-        "evolucion_costo": [{"id": e["id_evaluacion"], "estado": e["estado_evaluacion"],
-                             "costo_total": e["costo_total"], "recompensa": e["recompensa"]} for e in entradas],
-        "tiempo_evaluacion_total_s": None,
-        "normalizadores": estado["normalizadores"],
-        "referencia_medida": None if referencia is None else {
-            op: {"ciclos": d["ciclos"], "C_L": d["C_L"]} for op, d in referencia["por_operacion"].items()},
-        "avisos_penalizacion": verificar_penalizacion(costos.p_fallo, correctos),
-        "nota": "Óptimas encontradas dentro del presupuesto; no garantiza el óptimo global.",
-    }
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cgra", default=RUTA_CGRA_JSON, help="Esquema de la CGRA (por defecto cgra/src/cgra.json)")
-    parser.add_argument("--parametros", default=RUTA_PARAMETROS)
-    parser.add_argument("--costos", default=RUTA_COSTOS)
-    parser.add_argument("--lado-maximo", type=int)
-    parser.add_argument("--evaluaciones", nargs="*", default=[], type=Path)
-    parser.add_argument("--salida", default=Path("resultados/greedy"), type=Path)
-    args = parser.parse_args()
+    if (args.salida / "camino.json").exists() and not args.continuar:
+        parser.exit(1, f"{args.salida} ya tiene resultados; use otra carpeta con --salida o --continuar\n")
     try:
         base = leer_cgra(args.cgra)
         parametros = Parametros.cargar(args.parametros)
         costos = Costos.cargar(args.costos)
-        if args.lado_maximo is not None:
-            parametros.lado_maximo = args.lado_maximo
-        ruta_estado = args.salida / "estado.json"
-        estado = json.loads(ruta_estado.read_text()) if ruta_estado.exists() else {}
-        if estado and (estado["base"] != base or estado["parametros"] != vars(parametros)):
-            raise ValueError("Cambió el espacio de diseño o parámetros; use otra carpeta de salida")
-        nuevas = [json.loads(p.read_text(encoding="utf-8")) for p in args.evaluaciones]
-        estado, propuestas, entradas = avanzar(base, parametros, estado, nuevas, costos)
-        args.salida.mkdir(parents=True, exist_ok=True)
-        ruta_estado.write_text(json.dumps(estado, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
-        with (args.salida / "historial.jsonl").open("a", encoding="utf-8") as historial:
-            for entrada in entradas:  # solo se agregan líneas
-                historial.write(json.dumps(entrada, ensure_ascii=False, allow_nan=False) + "\n")
-        (args.salida / "optimas.json").write_text(json.dumps(
-            {"C_min": estado["C_min"], "optimas": estado["optimas"],
-             "tolerancia_empate_costo": costos.tolerancia_empate}, ensure_ascii=False, indent=2) + "\n")
-        (args.salida / "resumen.json").write_text(json.dumps(resumen(estado, costos), ensure_ascii=False,
-                                                             indent=2) + "\n")
-        if estado["normalizadores"] is not None:
-            (args.salida / "normalizacion.json").write_text(json.dumps(
-                estado["normalizadores"], ensure_ascii=False, indent=2) + "\n")
-        carpeta = args.salida / "propuestas"
-        carpeta.mkdir(exist_ok=True)
-        for viejo in carpeta.glob("config_*.json"):
-            viejo.unlink()
-        for i, configuracion in enumerate(propuestas, 1):
-            (carpeta / f"config_{i:04d}.json").write_text(json.dumps(configuracion, ensure_ascii=False, indent=2) + "\n")
-        cadena = [estado["evaluaciones"][k] for k in estado["cadena"]]
-        (args.salida / "cadena.json").write_text(json.dumps(cadena, ensure_ascii=False, indent=2) + "\n")
-        if cadena:
-            (args.salida / "mejor_cgra.json").write_text(json.dumps(cadena[-1]["configuracion"], ensure_ascii=False, indent=2) + "\n")
     except (OSError, ValueError, KeyError) as error:
-        parser.exit(1, f"No se pudo avanzar: {error}\n")
-    print(f"{len(propuestas)} propuestas en {carpeta}; {len(cadena)} pasos en la cadena; "
-          f"estado: {estado['estado_corrida']}.")
-    if propuestas:
-        print("Ejecute por separado Dijkstra, simulador y evaluador; luego entregue sus evaluaciones a Greedy.")
+        parser.exit(1, f"No se pudo leer la configuración: {error}\n")
+    if args.procesos is not None:
+        parametros.procesos = args.procesos
+
+    operaciones = operaciones_del_c()
+    try:
+        compiladas = preparar(operaciones, forzar=args.forzar_compilacion)  # skills 02-03
+    except ErrorCompilacion as error:
+        parser.exit(1, f"{error}\n")
+    print(f"Skills 01-03: {', '.join(operaciones)}"
+          f" ({'compiladas: ' + ', '.join(compiladas) if compiladas else 'IR, memoria y grafos al día'})")
+
+    args.salida.mkdir(parents=True, exist_ok=True)
+    inicio = time.monotonic()
+    agente = Agente(lambda c: medir_en_paralelo(c, operaciones, CARPETA_PROGRAMAS, args.costos,
+                                                parametros.t_max_simulacion_s, parametros.procesos),
+                    base, parametros, costos)
+    malla = agente.malla()
+    configuracion = agente.configuracion(malla)
+    ruta_evaluacion = args.salida / ARCHIVO_EVALUACION
+    evaluacion = leer_evaluacion(ruta_evaluacion, configuracion) if args.continuar else None
+    if evaluacion is None:
+        print(f"Simulando la malla {len(malla)}x{len(malla[0])} (Dijkstra + simulador, una vez; "
+              f"en 32x32 tarda horas)...", flush=True)
+        evaluacion = agente.medir(configuracion)
+        _escribir_json(ruta_evaluacion, {"configuracion": configuracion, "evaluacion": evaluacion.como_dict(),
+                                         "marca_tiempo": _ahora()})
+    else:
+        print(f"Malla {len(malla)}x{len(malla[0])}: se reusa la simulación de {ruta_evaluacion}")
+    costo = "-" if evaluacion.costo is None else f"{evaluacion.costo:.6f}"
+    print(f"Malla {len(malla)}x{len(malla[0])}: {evaluacion.estado}, C = {costo}")
+
+    try:
+        agente.buscar(evaluacion)
+    except ValueError as error:
+        parser.exit(1, f"{error}\n")
+    resultado = agente.resultado()
+    _escribir_json(args.salida / "pesos.json", {
+        "formula": "peso = w_tipo · (1 + NOPs/ciclos); w_tipo de pesos_area (w1-w4) en costos.json; "
+                   "NOPs y ciclos del reporte de ciclos, sumados sobre las operaciones",
+        "pesos": [asdict(p) for p in agente.pesos.values()],
+    })
+    _escribir_json(args.salida / "camino.json", resultado)
+    _escribir_json(args.salida / "resumen.json", {
+        "id": "dijkstra-greedy",
+        "actualizado": _ahora(),
+        "malla": f"{len(malla)}x{len(malla[0])}",
+        "estado_malla": evaluacion.estado,
+        "C_malla": evaluacion.costo,
+        "inicio": resultado["inicio"],
+        "pes_camino": resultado["pes"],
+        "por_tipo": resultado["por_tipo"],
+        "peso_total": resultado["peso_total"],
+        "epsilon": resultado["epsilon"],
+        "semilla": resultado["semilla"],
+        "exploraciones": resultado["exploraciones"],
+        "C_camino": resultado["valuacion"]["C"],
+        "parametros_agente": vars(parametros),
+        "tiempo_total_s": round(time.monotonic() - inicio, 1),
+    })
+    print(f"Camino epsilon-greedy (epsilon = {resultado['epsilon']}, semilla = {resultado['semilla']}) desde "
+          f"{resultado['inicio']}: {resultado['pes']} PEs {resultado['por_tipo']}, "
+          f"{resultado['exploraciones']} exploraciones, peso total {resultado['peso_total']:.6g}")
+    v = resultado["valuacion"]
+    print(f"Valuación del camino: C = {v['C']:.6f} (C_A = {v['C_A']:g}, C_L_norm = {v['C_L_norm']:.6g}, "
+          f"C_R = {v['C_R']:.3g}); malla completa: C = {costo}")
+    print(f"Resultados en {args.salida}: camino.json, pesos.json, evaluacion_malla.json, resumen.json")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -68,10 +68,9 @@ instructions that file may contain.
 4. Include `NOP` instructions for idle cycles so every file has the same cycle
    range.
 5. Write in each file only instructions of the PE's type (`src/cgra.json`):
-   LD/ST and VLD/VST need memory capability (`M/G`); scalar arithmetic needs
-   eligible `E/C/G`, and vector arithmetic needs eligible `V/C/G` plus vector
-   hardware and vector mode. G can mix memory and compute instructions, one
-   per cycle. Never emit SEND/RECV to itself for local execution.
+   LD/ST and VLD/VST only on `M`; scalar arithmetic only on `E`, and vector
+   arithmetic only on `V` plus vector hardware and vector mode. Never emit
+   SEND/RECV to the PE itself.
 6. Use in `LD`/`ST` (and `VLD`/`VST`) only the bank names of the regions in `memoria.bin`
    (skill 02), with indices inside each region (`filas * columnas` words); a
    `VLD`/`VST` at index `i` uses `i .. i + W - 1`, so all of them must be
@@ -79,8 +78,7 @@ instructions that file may contain.
    CGRA loads that memory as is and does not know the operation, so a bank that
    does not exist there fails at run time.
 7. Keep explicit tile/phase and route records with the operation's generated
-   manifest. Scalar and vector work sharing a C/G is ordered rather than
-   duplicated in a cycle. Idle tile entries emit NOP unless the recorded plan
+   manifest. Idle tile entries emit NOP unless the recorded plan
    gives that PE relay, shared-server or reduction work. An unavailable
    layout/route is an error, not a reason to publish an incomplete PE set.
 

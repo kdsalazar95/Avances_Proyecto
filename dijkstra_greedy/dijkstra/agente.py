@@ -1,59 +1,54 @@
-"""Agente Greedy (solución Dijkstra + Greedy): busca la configuración de la
-CGRA de menor costo y guarda la cadena de mejoras.
+"""Agente Greedy (solución Dijkstra + Greedy): camino por los PEs de una malla pesada.
 
-Es la caja "Agente" del ciclo de retroalimentación del PDF: propone
-configuraciones (tamaño, tipos de PE y su distribución), el evaluador
-(``evaluador.py``: Dijkstra + simulador) devuelve sus costos y el agente
-compara ``C = K_A·C_A + K_L·C_L + K_R·C_R``. Guarda una **cadena de mejoras**:
-cada configuración nueva se compara con la última de la cadena; si su C es
-mayor, se descarta (penalización); si es menor o igual, se agrega a la cadena
-(recompensa) y las siguientes se comparan con ella. La última es la mejor.
+El grafo de Greedy es la malla misma:
 
-Contrato con la solución RL (``solucion_rl.md``, sección 10): la ronda 0 es
-la referencia ``M E M / M V M / M E M`` (``C_best,0 = C_ref``), solo se
-proponen configuraciones que pasan la misma validación previa que el RL
-(``contrato.validar_accion``) y la búsqueda termina con el mismo presupuesto:
-``max_evaluaciones`` (sin contar la referencia) y ``paciencia`` (evaluaciones
-seguidas sin mejorar el mínimo en más de ``tolerancia_empate_costo``).
-Después, en cada ronda se exploran las vecinas (a un cambio de distancia) de
-las mejores de la cadena.
+* **Vértices:** los PEs de la malla (``malla`` en agente.json; por defecto la más
+  pesada, 32x32, con la distribución de cgra.json).
+* **Aristas:** las conexiones de cada PE con sus vecinos norte, sur, este y oeste.
+* **Peso de un PE:** ``w_tipo · (1 + NOPs / ciclos)``. ``w_tipo`` es el área de su
+  tipo con los pesos w1-w4 de costos.json (M = 12, E = 1, V = 2); ``NOPs`` y
+  ``ciclos`` salen del ``reporte_ciclos.txt`` del simulador, sumados sobre las
+  operaciones. Un PE que pasa más tiempo en NOP pesa más.
 
-Opcional (``barrido``, apagado por defecto porque no empieza en la referencia):
-la ronda 0 barre todos los tamaños de menos a más PEs, con cotas inferiores de
-C por área para descartar lo que no puede entrar a la cadena.
+Para tener los pesos, la malla se mapea con Dijkstra y se simula **una vez**
+(en 32x32 tarda horas). Después, el **camino** (no recursivo, sin ciclos):
+empieza en ``inicio`` (por defecto PE00, fila 0 y columna 0), revisa los vecinos
+que todavía no visitó y elige el siguiente con una política **epsilon-greedy**:
+con probabilidad ``epsilon`` explora (un vecino libre al azar) y si no, explota
+(el de menor peso). Repite hasta que el PE actual ya no tiene vecinos sin
+visitar. Ningún PE se visita dos veces. Con ``epsilon = 0`` es Greedy puro; la
+``semilla`` hace que el mismo camino se repita en cada corrida.
 
-El costo lo calcula solo el evaluador; el agente nada más compara
-``evaluacion.costo``. Para probarlo sin el pipeline, ``medir`` puede ser
-cualquier función ``configuración (dict de cgra.json) -> Evaluacion``.
+Resultado: los PEs del camino, con su tipo y su peso. No tienen que formar un
+rectángulo; los PEs que no están en el camino quedan fuera. El camino se valúa
+con la función de costo (``valuar_camino``) usando los datos de esa misma
+simulación, sin volver a simular.
 """
 
 import json
-import os
+import random
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import leer_cgra, rango
-from formato_cgra import FormatoCGRA, generar_malla  # noqa: E402 (cgra/src/ del simulador)
+from . import leer_cgra
+from formato_cgra import generar_malla  # noqa: E402 (cgra/src/ del simulador)
+from malla import Malla  # noqa: E402
+from topologia import DESPLAZAMIENTO, DIRECCIONES  # noqa: E402
 
-from .contrato import CORRECTA, NO_ATRIBUIBLES, Costos, validar_accion
+from .contrato import Costos
 
 RUTA_PARAMETROS = Path(__file__).resolve().parents[1] / "config" / "agente.json"
-ARITMETICA = frozenset({"ADD", "SUB", "MUL", "DIV", "VADD", "VSUB", "VMUL", "VDIV"})
 
 
 @dataclass
 class Parametros:
-    max_rondas: int = 50
-    lado_minimo: int = None
-    lado_maximo: int = None
-    barrido: bool = False
-    lote_barrido: int = 16
-    iniciales: object = "referencia"  # "referencia" o lista de tamaños [filas, columnas]
-    interior_alternativo: str = "C"
-    procesos: int = None
-    max_evaluaciones: int = 10
-    paciencia: int = 3
+    malla: object = (32, 32)  # [filas, columnas] (distribución de cgra.json) o lista de filas "M E M"
+    inicio: object = (0, 0)  # [fila, columna] del PE donde empieza el camino (PE00)
+    epsilon: float = 0.1  # probabilidad de explorar (vecino libre al azar) en cada paso; 0 = Greedy puro
+    semilla: int = 0  # semilla del azar de la exploración (mismo valor = mismo camino)
+    procesos: int = None  # procesos para simular las operaciones en paralelo (None = una por operación)
+    t_max_simulacion_s: float = None  # tiempo máximo del simulador para la malla (None = el de costos.json)
 
     @classmethod
     def cargar(cls, ruta=RUTA_PARAMETROS):
@@ -62,403 +57,216 @@ class Parametros:
 
 
 @dataclass
-class Registro:
-    """Una configuración evaluada (o descartada antes de evaluar)."""
+class PesoPE:
+    """Peso de un vértice (PE) y los datos del reporte de ciclos con que se calculó."""
 
-    malla: tuple  # tupla de filas, cada una una tupla de letras
-    clave: str
-    ronda: int
-    evaluacion: object = None  # Evaluacion del evaluador, o None si se descartó antes
-    motivo: str = ""
-
-    @property
-    def costo(self):
-        if self.evaluacion is None or self.evaluacion.costo is None:
-            return float("inf")
-        return self.evaluacion.costo
-
-    @property
-    def area(self):
-        if self.evaluacion is None or self.evaluacion.area is None:
-            return float("inf")
-        return self.evaluacion.area
-
-    @property
-    def estado(self):
-        return self.evaluacion.estado if self.evaluacion is not None else None
-
-    @property
-    def valida(self):
-        return self.evaluacion is not None and self.evaluacion.valida
-
-    def orden(self):
-        return (self.costo, self.area, self.clave)
-
-    def como_dict(self):
-        datos = {"ronda": self.ronda, "clave": self.clave, "malla": [" ".join(f) for f in self.malla],
-                 "costo": self.costo, "valida": self.valida, "estado": self.estado, "motivo": self.motivo}
-        if self.evaluacion is not None:
-            e = self.evaluacion
-            datos.update(
-                costo=e.costo, metricas={k: v for k, v in e.metricas.items() if k != "capacidades"},
-                operaciones={op: {"estado": o.estado, "modo": o.modo, "ciclos": o.ciclos, "C_L": o.C_L,
-                                  "C_R": o.C_R, "costo": o.costo, "motivo": o.motivo}
-                             for op, o in e.operaciones.items()},
-                motivo=self.motivo or e.motivo,
-            )
-        return datos
-
-
-def clave(malla):
-    """``3x3:M,E,M|M,V,M|M,C,M``"""
-    return f"{len(malla)}x{len(malla[0])}:" + "|".join(",".join(fila) for fila in malla)
+    pe: str
+    tipo: str
+    w_tipo: float
+    nops: int
+    ciclos: int
+    peso: float
 
 
 class Agente:
-    """Búsqueda determinística de configuraciones de la CGRA con una cadena de mejoras."""
+    """Epsilon-greedy sobre el grafo de PEs de una malla (determinístico para una misma semilla)."""
 
-    def __init__(self, medir, base=None, parametros=None, medir_lote=None, al_evaluar=None, cota=None,
-                 cota_tamano=None, costos=None, validar=None):
-        """``medir(configuración) -> Evaluacion``; ``medir_lote(lista) -> lista`` evalúa varias
-        a la vez (en paralelo) y debe devolverlas en el mismo orden. ``base``: el
-        dict de cgra.json (tipos, distribución, rangos); ``al_evaluar(registro)``
-        se llama con cada configuración nueva (para el historial).
-
-        ``cota(configuración)`` y ``cota_tamano(tipos_pe, pes)``: cotas inferiores
-        de C del evaluador (``Evaluador.cota`` y ``Evaluador.cota_tamano``). Sin
-        ellas no se descarta nada por costo.
-
-        ``costos``: parámetros del contrato (costos.json: referencia, restricciones,
-        tolerancia de empate); ``validar(configuración) -> [motivos]``: validación
-        previa (por defecto ``contrato.validar_accion`` con el esquema de ``base``)."""
+    def __init__(self, medir, base=None, parametros=None, costos=None):
+        """``medir(configuración) -> Evaluacion``: el evaluador (Dijkstra + simulador); la
+        Evaluacion debe traer ``nops_por_pe`` en cada operación. ``base``: el dict de cgra.json."""
         self.medir = medir
-        self.cota = cota
-        self.cota_tamano = cota_tamano
-        self.barrido = {"tamanos": 0, "revisados": 0, "hasta": None, "sin_revisar": 0}
-        self.medir_lote = medir_lote or (lambda configuraciones: [medir(c) for c in configuraciones])
         self.base = base if base is not None else leer_cgra()
         self.parametros = parametros or Parametros()
-        self.al_evaluar = al_evaluar
         self.costos = costos or Costos.cargar()
-        self.validar = validar or self._validar
-        self.tipos = list(self.base["tipos_pe"])
-        instrucciones = {letra: {i.upper() for i in t["instrucciones"]} for letra, t in self.base["tipos_pe"].items()}
-        self.de_memoria = {t for t in self.tipos if "LD" in instrucciones[t]}
-        self.de_computo = {t for t in self.tipos if instrucciones[t] & ARITMETICA}
-        # Solo memoria (M): no se cambian en los movimientos por fila.
-        self.solo_memoria = [t for t in self.tipos if t in self.de_memoria and t not in self.de_computo]
-        self.solo_computo = [t for t in self.tipos if t in self.de_computo and t not in self.de_memoria]
-        p = self.parametros
-        self.limites = []
-        for nombre in ("filas", "columnas"):
-            minimo, maximo = rango(self.base[nombre])
-            if p.lado_minimo is not None:
-                minimo = max(minimo, p.lado_minimo)
-            if p.lado_maximo is not None:
-                maximo = min(maximo, p.lado_maximo)
-            self.limites.append((minimo, maximo))
-        self.registros = {}  # clave -> Registro
-        self.historial = []  # registros en el orden en que se evaluaron
-        self.cadena = []  # registros válidos, cada uno de C menor o igual que el anterior
-        self.cadena_por_ronda = []
-        self.evaluadas = 0  # evaluaciones del presupuesto (sin la referencia)
-        self.c_min = None  # menor C correcto (óptimas del RL)
-        self.sin_mejora = 0
-        self.terminada = None  # motivo de fin por presupuesto
+        self.evaluacion = None  # la evaluación de la malla (una sola simulación)
+        self.pesos = {}  # PE -> PesoPE
+        self.camino = []  # PEs del camino, en orden
+        self.decisiones = []  # por paso: "inicio", "explotacion" o "exploracion"
 
-    def _validar(self, configuracion):
-        from .evaluador import Evaluador
-        try:
-            formato = Evaluador.formato(configuracion)
-        except (ValueError, TypeError, KeyError) as error:
-            return [f"cgra.json: {error}"]
-        return validar_accion(configuracion, formato, self.costos.restricciones, self.base["tipos_pe"])
+    # -- la malla ---------------------------------------------------------------------
+    def de_distribucion(self, filas, columnas):
+        """La malla de la distribución de cgra.json en ese tamaño."""
+        if "distribucion" not in self.base:
+            raise ValueError("la malla sale de 'distribucion' de cgra.json, y no la tiene")
+        return tuple(tuple(fila) for fila in generar_malla(filas, columnas, self.base["distribucion"]))
 
-    def referencia(self):
-        return tuple(tuple(fila.split()) for fila in self.costos.referencia)
+    def malla(self):
+        """La malla del grafo: ``[filas, columnas]`` con la distribución de cgra.json, o filas explícitas."""
+        m = self.parametros.malla
+        if m and isinstance(m[0], str):
+            return tuple(tuple(fila.split()) for fila in m)
+        return self.de_distribucion(m[0], m[1])
 
-    # -- configuraciones --------------------------------------------------------
-    def configuracion(self, malla):
+    def configuracion(self, malla=None):
         """La configuración que recibe el evaluador: cgra.json con tamaño fijo y ``malla`` explícita."""
+        malla = malla or self.malla()
         datos = {k: v for k, v in self.base.items() if k not in ("distribucion", "malla", "descripcion")}
         datos.update(filas=len(malla), columnas=len(malla[0]), malla=[" ".join(fila) for fila in malla])
         return datos
 
-    def iniciales(self):
-        """Las configuraciones de partida (sin barrido): la referencia, o los tamaños de ``iniciales``."""
-        if self.parametros.iniciales == "referencia":
-            return [self.referencia()]
-        mallas = []
-        for filas, columnas in self.parametros.iniciales:
-            filas = min(max(filas, self.limites[0][0]), self.limites[0][1])
-            columnas = min(max(columnas, self.limites[1][0]), self.limites[1][1])
-            mallas.extend(self.de_distribucion(filas, columnas))
-        return list(dict.fromkeys(mallas))
+    # -- pesos de los vértices --------------------------------------------------------
+    def calcular_pesos(self, evaluacion, malla=None):
+        """``{PE: PesoPE}`` con ``peso = w_tipo · (1 + NOPs/ciclos)``, sumando las operaciones."""
+        malla = malla or self.malla()
+        operaciones = list(evaluacion.operaciones.values())
+        faltan = [o.operacion for o in operaciones if not o.nops_por_pe or not o.ciclos]
+        if faltan:
+            raise ValueError(f"sin reporte de ciclos por PE en: {', '.join(faltan)}")
+        ciclos = sum(o.ciclos for o in operaciones)
+        ids = Malla(len(malla), len(malla[0]))
+        pesos = {}
+        for f, fila in enumerate(malla):
+            for c, tipo in enumerate(fila):
+                pe = ids.id_de(f, c)
+                w = self.costos.area_pe(self.base["tipos_pe"][tipo]["instrucciones"])
+                nops = sum(o.nops_por_pe[pe] for o in operaciones)
+                pesos[pe] = PesoPE(pe, tipo, w, nops, ciclos, w * (1 + nops / ciclos))
+        return pesos
 
-    def de_distribucion(self, filas, columnas):
-        """La malla de la distribución de cgra.json en ese tamaño y su variante con el interior alternativo."""
-        if "distribucion" not in self.base:
-            raise ValueError("las configuraciones iniciales salen de 'distribucion' de cgra.json, y no la tiene")
-        malla = tuple(tuple(fila) for fila in generar_malla(filas, columnas, self.base["distribucion"]))
-        mallas = [malla]
-        alternativo = self.parametros.interior_alternativo
-        if alternativo:
-            mallas.append(tuple(tuple(t if t in self.solo_memoria else alternativo for t in fila) for fila in malla))
-        return list(dict.fromkeys(mallas))
-
-    def tamanos(self):
-        """Todos los tamaños de los límites, de menos a más PEs (y por filas, columnas)."""
-        (fmin, fmax), (cmin, cmax) = self.limites
-        return sorted(((f, c) for f in range(fmin, fmax + 1) for c in range(cmin, cmax + 1)),
-                      key=lambda t: (t[0] * t[1], t))
-
-    def motivo_invalida(self, malla):
-        """Validación previa barata; ``None`` si se puede evaluar."""
-        filas, columnas = len(malla), len(malla[0])
-        (fmin, fmax), (cmin, cmax) = self.limites
-        if not (fmin <= filas <= fmax and cmin <= columnas <= cmax):
-            return f"tamaño {filas}x{columnas} fuera de los límites (filas {fmin}..{fmax}, columnas {cmin}..{cmax})"
-        if any(len(fila) != columnas for fila in malla):
-            return "las filas de la malla no tienen el mismo largo"
-        motivos = self.validar(self.configuracion(malla))
-        return motivos[0] if motivos else None
-
-    def vecinas(self, malla):
-        """Configuraciones a un cambio de distancia, siempre en el mismo orden."""
-        filas, columnas = len(malla), len(malla[0])
-        lista = [list(fila) for fila in malla]
-        resultado = []
-
-        def agregar(nueva):
-            resultado.append(tuple(tuple(fila) for fila in nueva))
-
-        # 1. Movimiento grande: todos los PEs que no son solo de memoria de una fila, a un tipo de cómputo.
-        for f in range(filas):
-            for tipo in self.solo_computo:
-                nueva = [fila[:] for fila in lista]
-                nueva[f] = [t if t in self.solo_memoria else tipo for t in nueva[f]]
-                agregar(nueva)
-        # 2. Agregar una fila o columna: copia de la interior más cercana al borde sur / este.
-        origen = filas - 2 if filas >= 3 else filas - 1
-        agregar(lista[:filas - 1] + [lista[origen][:]] + lista[filas - 1:] if filas >= 2 else lista + [lista[0][:]])
-        origen = columnas - 2 if columnas >= 3 else columnas - 1
-        if columnas >= 2:
-            agregar([fila[:columnas - 1] + [fila[origen]] + fila[columnas - 1:] for fila in lista])
-        else:
-            agregar([fila + [fila[0]] for fila in lista])
-        # 3. Quitar cada fila y cada columna.
-        if filas > 1:
-            for f in range(filas):
-                agregar(lista[:f] + lista[f + 1:])
-        if columnas > 1:
-            for c in range(columnas):
-                agregar([fila[:c] + fila[c + 1:] for fila in lista])
-        # 4. Cambiar el tipo de un PE.
-        for f in range(filas):
-            for c in range(columnas):
-                for tipo in self.tipos:
-                    if tipo != lista[f][c]:
-                        nueva = [fila[:] for fila in lista]
-                        nueva[f][c] = tipo
-                        agregar(nueva)
-        # 5. Mover un PE de memoria al siguiente lugar del perímetro (sentido horario).
-        perimetro = self._perimetro(filas, columnas)
-        for i, (f, c) in enumerate(perimetro):
-            if lista[f][c] in self.solo_memoria and len(perimetro) > 1:
-                f2, c2 = perimetro[(i + 1) % len(perimetro)]
-                if lista[f2][c2] != lista[f][c]:
-                    nueva = [fila[:] for fila in lista]
-                    nueva[f][c], nueva[f2][c2] = nueva[f2][c2], nueva[f][c]
-                    agregar(nueva)
-        return [v for v in dict.fromkeys(resultado) if v != malla]
-
+    # -- camino Greedy ----------------------------------------------------------------
     @staticmethod
-    def _perimetro(filas, columnas):
-        """Celdas del borde en sentido horario desde (0, 0)."""
-        if filas == 1:
-            return [(0, c) for c in range(columnas)]
-        if columnas == 1:
-            return [(f, 0) for f in range(filas)]
-        arriba = [(0, c) for c in range(columnas)]
-        derecha = [(f, columnas - 1) for f in range(1, filas)]
-        abajo = [(filas - 1, c) for c in range(columnas - 2, -1, -1)]
-        izquierda = [(f, 0) for f in range(filas - 2, 0, -1)]
-        return arriba + derecha + abajo + izquierda
+    def vecinos(pe, filas, columnas):
+        """Aristas de un PE: sus vecinos norte, sur, este y oeste que están dentro de la malla."""
+        ids = Malla(filas, columnas)
+        fila, columna = Malla.posicion(pe)
+        resultado = []
+        for direccion in DIRECCIONES:
+            df, dc = DESPLAZAMIENTO[direccion]
+            if 0 <= fila + df < filas and 0 <= columna + dc < columnas:
+                resultado.append(ids.id_de(fila + df, columna + dc))
+        return resultado
 
-    # -- evaluación ---------------------------------------------------------------
-    def evaluar(self, mallas, ronda, umbral=float("inf")):
-        """Evalúa las mallas que todavía no se evaluaron; devuelve sus registros, en orden.
-        Las que según ``cota`` no pueden bajar de ``umbral`` se descartan sin medir."""
-        nuevas = [m for m in dict.fromkeys(mallas) if clave(m) not in self.registros]
-        if self.terminada:
-            nuevas = []
-        por_medir = []
-        for malla in nuevas:
-            registro = Registro(malla, clave(malla), ronda)
-            registro.motivo = self.motivo_invalida(malla) or ""
-            if not registro.motivo and self.cota and umbral < float("inf"):
-                cota = self.cota(self.configuracion(malla))
-                if cota > umbral:
-                    registro.motivo = f"no puede entrar a la cadena: C ≥ {cota:.6g} > {umbral:.6g}"
-            self.registros[registro.clave] = registro
-            if not registro.motivo:
-                por_medir.append(registro)
-        # Presupuesto: no se miden más de las que quedan (la referencia no cuenta).
-        restantes = self._restantes()
-        if restantes is not None:
-            sobran = [r for r in por_medir if r.malla != self.referencia()][restantes:]
-            for registro in sobran:
-                del self.registros[registro.clave]
-            por_medir = [r for r in por_medir if r not in sobran]
-            nuevas = [m for m in nuevas if clave(m) in self.registros]
-        for registro, evaluacion in zip(por_medir,
-                                        self.medir_lote([self.configuracion(r.malla) for r in por_medir])):
-            registro.evaluacion = evaluacion
-        for malla in nuevas:
-            registro = self.registros[clave(malla)]
-            if registro.evaluacion is not None and self.terminada:
-                del self.registros[registro.clave]  # se midió en el lote, pero ya no cabe
-                continue
-            self.historial.append(registro)
-            if registro.evaluacion is not None:
-                self._contar(registro)
-            if self.al_evaluar:
-                self.al_evaluar(registro)
-        return [self.registros[clave(m)] for m in mallas if clave(m) in self.registros]
+    def caminar(self, pesos, filas, columnas):
+        """Desde ``inicio``, epsilon-greedy entre los vecinos sin visitar, hasta que el PE actual no
+        tiene vecinos sin visitar. En cada paso, con probabilidad ``epsilon`` explora (uno de los
+        libres al azar) y si no, explota (el de menor peso; en empate, el primero fila por fila).
+        Deja en ``self.decisiones`` qué se hizo en cada paso."""
+        epsilon = self.parametros.epsilon
+        if not 0 <= epsilon <= 1:
+            raise ValueError(f"epsilon = {epsilon} debe estar entre 0 y 1")
+        azar = random.Random(self.parametros.semilla)
+        f0, c0 = self.parametros.inicio
+        if not (0 <= f0 < filas and 0 <= c0 < columnas):
+            raise ValueError(f"inicio ({f0}, {c0}) fuera de la malla {filas}x{columnas}")
+        ids = Malla(filas, columnas)
+        orden = {pe: i for i, pe in enumerate(ids.ids())}
+        actual = ids.id_de(f0, c0)
+        camino, visitados = [actual], {actual}
+        self.decisiones = ["inicio"]
+        while True:
+            libres = [v for v in self.vecinos(actual, filas, columnas) if v not in visitados]
+            if not libres:
+                return camino
+            if azar.random() < epsilon:
+                actual = azar.choice(sorted(libres, key=orden.get))
+                self.decisiones.append("exploracion")
+            else:
+                actual = min(libres, key=lambda v: (pesos[v].peso, orden[v]))
+                self.decisiones.append("explotacion")
+            camino.append(actual)
+            visitados.add(actual)
 
-    def _restantes(self):
-        maximo = self.parametros.max_evaluaciones
-        return None if maximo is None else max(maximo - self.evaluadas, 0)
+    def buscar(self, evaluacion=None):
+        """Simula la malla (o usa ``evaluacion`` si ya se tiene), calcula los pesos y recorre el camino.
+        Devuelve la lista de PEs del camino."""
+        malla = self.malla()
+        self.evaluacion = evaluacion if evaluacion is not None else self.medir(self.configuracion(malla))
+        if not self.evaluacion.valida:
+            raise ValueError(f"la malla {len(malla)}x{len(malla[0])} no es correcta "
+                             f"({self.evaluacion.estado}): {self.evaluacion.motivo}")
+        self.pesos = self.calcular_pesos(self.evaluacion, malla)
+        self.camino = self.caminar(self.pesos, len(malla), len(malla[0]))
+        return self.camino
 
-    def _contar(self, registro):
-        """Presupuesto y paciencia, en el orden de evaluación, con la regla de óptimas del RL."""
-        es_referencia = registro.malla == self.referencia()
-        e = registro.evaluacion
-        mejora = False
-        if e.estado == CORRECTA and e.costo is not None:
-            if self.c_min is None or e.costo < self.c_min - self.costos.tolerancia_empate:
-                self.c_min, mejora = e.costo, True
-        if not es_referencia:
-            self.evaluadas += 1
-            if e.estado not in NO_ATRIBUIBLES:
-                self.sin_mejora = 0 if mejora else self.sin_mejora + 1
-        p = self.parametros
-        if p.max_evaluaciones is not None and self.evaluadas >= p.max_evaluaciones:
-            self.terminada = "max_evaluaciones"
-        elif p.paciencia is not None and self.sin_mejora >= p.paciencia:
-            self.terminada = "paciencia"
+    # -- valuación del camino -----------------------------------------------------------
+    def valuar_camino(self):
+        """Costo de los PEs del camino con la función de costo (contrato.py), sin volver a simular:
+        los ciclos, los NOPs de cada PE y C_R salen de la evaluación de la malla.
 
-    def umbral(self):
-        """C de la última de la cadena: lo que no pueda bajar de ahí no entra."""
-        return self.cadena[-1].costo if self.cadena else float("inf")
+        C_A = Σ w_tipo de los PEs del camino; por operación, C_L = latencia(ciclos, NOPs del
+        camino, PEs del camino); C = promedio de K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R."""
+        n = self.evaluacion.normalizadores
+        if not n:
+            raise ValueError("la evaluación de la malla no trae normalizadores")
+        k = self.costos.K
+        pes = len(self.camino)
+        c_a = sum(self.pesos[pe].w_tipo for pe in self.camino)
+        por_operacion = {}
+        for op, e in self.evaluacion.operaciones.items():
+            nops = sum(e.nops_por_pe[pe] for pe in self.camino)
+            c_l = self.costos.latencia(e.ciclos, nops, pes)
+            ref = n["operaciones"][op]
+            c_l_norm = c_l / ref["C_L_ref"]
+            costo = k["K_A"] * c_a / ref["C_A_ref"] + k["K_L"] * c_l_norm + k["K_R"] * e.C_R
+            por_operacion[op] = {"ciclos": e.ciclos, "nops": nops, "C_L": c_l, "C_L_norm": c_l_norm,
+                                 "C_R": e.C_R, "costo": costo}
+        costos_op = [o["costo"] for o in por_operacion.values()]
+        return {
+            "C": sum(costos_op) / len(costos_op),
+            "C_A": c_a,
+            "C_A_norm": c_a / n["C_A_ref"],
+            "C_L_norm": sum(o["C_L_norm"] for o in por_operacion.values()) / len(por_operacion),
+            "C_R": sum(o["C_R"] for o in por_operacion.values()) / len(por_operacion),
+            "pes": pes,
+            "por_operacion": por_operacion,
+            "formula": "C = promedio de K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R; C_A = Σ w_tipo del camino; "
+                       "C_L = ciclos·(1 + NOPs del camino/(ciclos·PEs del camino)); ciclos, NOPs y C_R de la "
+                       "evaluación de la malla (sin volver a simular)",
+        }
 
-    def actualizar_cadena(self, registros):
-        """Compara cada registro válido, en orden, con la última de la cadena: si su C es
-        mayor se descarta; si es menor o igual, se agrega y los siguientes se comparan
-        con él. Devuelve los que entraron."""
-        entraron = []
-        for registro in registros:
-            if not registro.valida or registro.costo > self.umbral():
-                continue
-            if any(otro.clave == registro.clave for otro in self.cadena):
-                continue
-            self.cadena.append(registro)
-            entraron.append(registro)
-        return entraron
-
-    def barrer(self, al_avanzar=None):
-        """Ronda 0: todos los tamaños, de menos a más PEs, de a ``lote_barrido``.
-        Termina en el primer tamaño en que ninguna malla podría bajar del umbral."""
-        p = self.parametros
-        tamanos = self.tamanos()
-        lote_barrido = max(p.lote_barrido, 1)
-        self.barrido = {"tamanos": len(tamanos), "revisados": 0, "hasta": None, "sin_revisar": 0}
-        for inicio in range(0, len(tamanos), lote_barrido):
-            umbral = self.umbral()
-            lote, cortado = [], False
-            for filas, columnas in tamanos[inicio:inicio + lote_barrido]:
-                if self.cota_tamano and self.cota_tamano(self.base["tipos_pe"], filas * columnas) > umbral:
-                    cortado = True
-                    break
-                lote.extend(self.de_distribucion(filas, columnas))
-                self.barrido["revisados"] += 1
-                self.barrido["hasta"] = (filas, columnas)
-            self.actualizar_cadena(self.evaluar(lote, 0, umbral))
-            if al_avanzar:
-                al_avanzar(self.barrido, self.cadena)
-            if cortado:
-                break
-        self.barrido["sin_revisar"] = len(tamanos) - self.barrido["revisados"]
-
-    def buscar(self, al_terminar_ronda=None, al_avanzar_barrido=None):
-        """Arma la cadena de mejoras y la devuelve en el orden en que se encontró.
-
-        En cada ronda se exploran las vecinas de las mejores de la cadena (la última
-        y las que empatan con ella) que todavía no se exploraron. Termina cuando no
-        queda ninguna por explorar (ninguna vecina bajó el costo) o a las ``max_rondas``."""
-        p = self.parametros
-        self.cadena = []
-        self.evaluadas, self.c_min, self.sin_mejora, self.terminada = 0, None, 0, None
-        if p.barrido:
-            self.barrer(al_avanzar_barrido)
-        else:
-            self.actualizar_cadena(self.evaluar(self.iniciales(), 0))
-            referencia = self.registros.get(clave(self.referencia()))
-            if p.iniciales == "referencia" and (referencia is None or not referencia.valida):
-                self.terminada = "referencia no válida"  # sin referencia no hay C_best,0 (como el RL)
-        self.cadena_por_ronda = [list(self.cadena)]
-        if al_terminar_ronda:
-            al_terminar_ronda(0, self.cadena)
-        exploradas = set()
-        for ronda in range(1, p.max_rondas + 1):
-            if self.terminada:
-                break
-            por_explorar = [r for r in self.cadena if r.costo == self.umbral() and r.clave not in exploradas]
-            if not por_explorar:
-                break
-            exploradas.update(r.clave for r in por_explorar)
-            vecinas = [v for r in por_explorar for v in self.vecinas(r.malla) if clave(v) not in self.registros]
-            self.actualizar_cadena(self.evaluar(vecinas, ronda, self.umbral()))
-            self.cadena_por_ronda.append(list(self.cadena))
-            if al_terminar_ronda:
-                al_terminar_ronda(ronda, self.cadena)
-        return self.cadena
+    # -- resultado --------------------------------------------------------------------
+    def resultado(self):
+        """Los PEs del camino con su tipo y peso, y el mapa de la malla con '.' en los que quedan fuera."""
+        malla = self.malla()
+        ids = Malla(len(malla), len(malla[0]))
+        en_camino = set(self.camino)
+        mapa = [" ".join(t if ids.id_de(f, c) in en_camino else "." for c, t in enumerate(fila))
+                for f, fila in enumerate(malla)]
+        tipos = {}
+        for pe in self.camino:
+            tipos[self.pesos[pe].tipo] = tipos.get(self.pesos[pe].tipo, 0) + 1
+        return {
+            "inicio": self.camino[0] if self.camino else None,
+            "pes": len(self.camino),
+            "por_tipo": tipos,
+            "peso_total": sum(self.pesos[pe].peso for pe in self.camino),
+            "valuacion": self.valuar_camino(),
+            "epsilon": self.parametros.epsilon,
+            "semilla": self.parametros.semilla,
+            "exploraciones": self.decisiones.count("exploracion"),
+            "camino": [{"paso": i, "decision": d, **asdict(self.pesos[pe])}
+                       for i, (pe, d) in enumerate(zip(self.camino, self.decisiones))],
+            "mapa": mapa,
+        }
 
 
-# -- evaluación en paralelo -----------------------------------------------------
-_EVALUADOR = None
+# -- simulación de la malla: una operación por proceso ---------------------------------
+def _costos(ruta_costos, t_max):
+    costos = Costos.cargar(ruta_costos)
+    if t_max is not None:
+        costos.t_max_simulacion_s = t_max
+    return costos
 
 
-def _iniciar_proceso(argumentos):
-    global _EVALUADOR
-    from .evaluador import Costos, Evaluador
-    operaciones, carpeta, ruta_costos, modo = argumentos
-    _EVALUADOR = Evaluador(operaciones, carpeta, Costos.cargar(ruta_costos), modo=modo)
+def _evaluar_operacion(argumentos):
+    from .evaluador import Evaluador
+    operacion, carpeta, ruta_costos, t_max, configuracion = argumentos
+    evaluador = Evaluador([operacion], carpeta, _costos(ruta_costos, t_max))
+    return evaluador.evaluar(configuracion).operaciones[operacion]
 
 
-def _evaluar_en_proceso(configuracion):
-    return _EVALUADOR.evaluar(configuracion)
-
-
-class EvaluadorParalelo:
-    """Evalúa listas de configuraciones repartidas en procesos, cada uno con su
-    ``Evaluador``. Devuelve los resultados en el orden de la lista, así que el
-    agente decide igual que en serie."""
-
-    def __init__(self, operaciones, carpeta, ruta_costos, modo="auto", procesos=None):
-        self.procesos = procesos or os.cpu_count() or 1
-        self.argumentos = (operaciones, str(carpeta), str(ruta_costos), modo)
-        self._pool = None
-
-    def lote(self, configuraciones):
-        if not configuraciones:
-            return []
-        if self._pool is None:
-            self._pool = ProcessPoolExecutor(self.procesos, initializer=_iniciar_proceso,
-                                             initargs=(self.argumentos,))
-        return list(self._pool.map(_evaluar_en_proceso, configuraciones))
-
-    def cerrar(self):
-        if self._pool is not None:
-            self._pool.shutdown()
-            self._pool = None
+def medir_en_paralelo(configuracion, operaciones, carpeta, ruta_costos, t_max=None, procesos=None):
+    """Evalúa la configuración con cada operación en su propio proceso y junta los costos
+    como ``Evaluador.evaluar`` (mismos normalizadores y ecuaciones)."""
+    from .evaluador import EvaluacionOperacion, Evaluador, agregar
+    costos = _costos(ruta_costos, t_max)
+    evaluador = Evaluador(list(operaciones), carpeta, costos)
+    if evaluador.motivos_invalida(configuracion):
+        return evaluador.evaluar(configuracion)
+    argumentos = [(op, str(carpeta), str(ruta_costos), t_max, configuracion) for op in operaciones]
+    with ProcessPoolExecutor(procesos or len(operaciones)) as pool:
+        por_op = dict(zip(operaciones, pool.map(_evaluar_operacion, argumentos)))
+    por_op = {op: EvaluacionOperacion(**asdict(e)) for op, e in por_op.items()}
+    simuladas = any(e.C_L is not None for e in por_op.values())
+    normalizadores = evaluador.normalizadores() if simuladas else evaluador._fijos
+    return agregar(Evaluador.formato(configuracion), por_op, costos, normalizadores)
