@@ -294,6 +294,17 @@ class TestMapeoDijkstra(unittest.TestCase):
                                      (secuencial.valido, secuencial.motivo, secuencial.ubicacion,
                                       secuencial.programa, secuencial.metricas))
 
+    def test_1c_tope_de_procesos_por_candidatos(self):
+        """Pedir más procesos que candidatos se limita al mayor número de candidatos y no cambia el mapeo."""
+        from dijkstra.mapeador import Mapeador
+        grafo, mallado = ejemplo_a_mano(), malla("M E M", "M V M", "M E M")
+        maximo = max(len(self.compat.candidatos(mallado, op.op) or []) for op in grafo.operaciones)
+        self.assertEqual(Mapeador(grafo, mallado, self.compat, Opciones(procesos=1000))._tope_procesos(), maximo)
+        secuencial = mapear(grafo, mallado, self.compat)
+        paralelo = mapear(grafo, mallado, self.compat, Opciones(procesos=1000))
+        self.assertEqual((paralelo.valido, paralelo.ubicacion, paralelo.programa),
+                         (secuencial.valido, secuencial.ubicacion, secuencial.programa))
+
     def test_6_formato_invalido_no_se_cae(self):
         """Un .json de CGRA que no existe debe dar un resultado inválido, no una excepción."""
         resultado = evaluar_configuracion(ejemplo_a_mano(), "/no/existe/cgra.json")

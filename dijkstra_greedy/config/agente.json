@@ -25,7 +25,7 @@
   "rl": "Agente RL del enlace epsilon-greedy: 'comando' es el CLI que recibe el prompt del paso en {prompt} (GitHub Copilot CLI: copilot -p {prompt} --allow-all --silent); debe responder con el identificador de un vecino libre. 'timeout_s' por respuesta. null = sin agente RL.",
     "semilla": "Semilla del azar de la exploración: con la misma semilla y los mismos pesos sale el mismo camino. Cambiarla da otro camino con el mismo epsilon.",
     "procesos": "Procesos para simular las operaciones de la malla en paralelo (null = uno por operación).",
-    "mapeador_procesos": "Procesos que prueban los candidatos de cada operación en el mapeador (1 = secuencial). Dan exactamente el mismo mapeo y solo cambian el tiempo.",
+    "mapeador_procesos": "Procesos que prueban los candidatos de cada operación en el mapeador (1 = secuencial). Dan exactamente el mismo mapeo y solo cambian el tiempo. Se limitan al mayor número de candidatos de una operación. Se puede cambiar con --mapeador-procesos.",
     "t_max_simulacion_s": "Tiempo máximo del simulador para la malla, en segundos (el de costos.json es 60, pensado para mallas chicas)."
   }
 }

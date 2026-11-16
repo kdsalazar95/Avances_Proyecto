@@ -80,6 +80,9 @@ def main(argv=None):
     parser.add_argument("--costos", default=RUTA_COSTOS, help="Ecuaciones y pesos w1-w4 (config/costos.json)")
     parser.add_argument("--cgra", default=RUTA_CGRA_JSON, help="Esquema de la CGRA (cgra/src/cgra.json)")
     parser.add_argument("--procesos", type=int, help="Procesos para simular las operaciones en paralelo")
+    parser.add_argument("--mapeador-procesos", type=int,
+                        help="Procesos que prueban los candidatos del mapeador (1 = secuencial; "
+                             "mismo resultado; se limita al mayor número de candidatos de una operación)")
     parser.add_argument("--forzar-compilacion", action="store_true", help="Repetir los skills 02-03")
     parser.add_argument("--continuar", action="store_true",
                         help="Reusar la simulación de la malla guardada en --salida (si es la misma malla)")
@@ -95,6 +98,8 @@ def main(argv=None):
         parser.exit(1, f"No se pudo leer la configuración: {error}\n")
     if args.procesos is not None:
         parametros.procesos = args.procesos
+    if args.mapeador_procesos is not None:
+        parametros.mapeador_procesos = args.mapeador_procesos
 
     operaciones = operaciones_del_c()
     try:

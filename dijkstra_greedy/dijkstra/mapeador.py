@@ -251,9 +251,15 @@ class Mapeador:
 
     # -- algoritmo -----------------------------------------------------------
     def mapear(self):
-        if self.opciones.procesos > 1:
-            return _mapear_en_cuadrilla(self, self.opciones.procesos)
+        procesos = min(self.opciones.procesos, self._tope_procesos())
+        if procesos > 1:
+            return _mapear_en_cuadrilla(self, procesos)
         return self._mapear()
+
+    def _tope_procesos(self):
+        """Con más procesos que candidatos de la operación con más candidatos, sobran procesos."""
+        por_operacion = [self.compat.candidatos(self.malla, op.op) or [] for op in self.grafo.operaciones]
+        return max((len(c) for c in por_operacion), default=1)
 
     def _mapear(self):
         n = len(self.grafo)

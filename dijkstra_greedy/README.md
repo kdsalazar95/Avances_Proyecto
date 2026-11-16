@@ -80,7 +80,7 @@ partida de la búsqueda es la 32x32.
 |---|---|
 | `config/costos.json` | Ecuaciones: pesos, K, tolerancias, P_fallo, restricciones del espacio de acciones, referencia de normalización |
 | `config/normalizacion.json` | C_A_ref y C_L_ref por operación (medidos con la solución RL) |
-| `config/agente.json` | Agente: malla del grafo, PE de inicio, `epsilon` y `semilla`, procesos del simulador y del mapeador (`mapeador_procesos`, mismo resultado que el secuencial) y tiempo máximo de simulación |
+| `config/agente.json` | Agente: malla del grafo, PE de inicio, `epsilon` y `semilla`, procesos del simulador y del mapeador (`mapeador_procesos`, o `--mapeador-procesos` en la línea de comandos; mismo resultado que el secuencial) y tiempo máximo de simulación |
 | `config/compatibilidad.json` | Operación del grafo → instrucción del ISA (para Dijkstra) |
 
 ## Estructura
