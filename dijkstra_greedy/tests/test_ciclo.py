@@ -44,6 +44,7 @@ class TestCicloCompleto(_ConOperaciones):
             pesos = json.loads((salida / "pesos.json").read_text())["pesos"]
             camino = json.loads((salida / "camino.json").read_text())
             resumen = json.loads((salida / "resumen.json").read_text())
+            historia = json.loads((salida / "historia.json").read_text())
             with mock.patch.object(agente_greedy, "medir_en_paralelo", side_effect=AssertionError):
                 self.assertEqual(self.correr(salida, parametros, "--continuar"), 0)
             otra_vez = json.loads((salida / "camino.json").read_text())
@@ -60,3 +61,5 @@ class TestCicloCompleto(_ConOperaciones):
         self.assertEqual(resumen["C_camino"], camino["valuacion"]["C"])
         self.assertEqual(set(camino["valuacion"]["por_operacion"]), {self.pequena})
         self.assertEqual(otra_vez, camino)
+        self.assertEqual([p["pe"] for p in historia["pasos"]], pes)  # historia.json para la curva y el GIF
+        self.assertEqual(historia["pasos"][-1]["C"], camino["valuacion"]["C"])

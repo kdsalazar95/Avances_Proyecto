@@ -15,6 +15,7 @@ _raiz_dg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(_raiz_dg), "cgra", "src"))  # simulador (cgra/src)
 sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (dijkstra_greedy/)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_dg, "herramientas"))  # gif_camino.py
 
 from dijkstra.agente import Agente, Parametros, PesoPE, medir_en_paralelo
 from dijkstra.rl_copilot import EleccionCopilot, construir_prompt, interpretar
@@ -201,6 +202,51 @@ class TestAgenteGreedy(unittest.TestCase):
         self.assertEqual([p["decision"] for p in r["camino"]], agente.decisiones)
         with self.assertRaisesRegex(ValueError, "epsilon"):
             correr(epsilon=1.5)
+
+    def test_12_historia_del_camino(self):
+        """La historia valúa cada prefijo del camino (el último es la valuación del camino), dice si cumple
+        los tipos de PE (memoria, E y V) y marca el de menor C entre los que cumplen."""
+        nops = nops_iguales(MALLA_3X3, 4)
+        agente = Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops}), BASE, parametros())
+        camino = agente.buscar()
+        h = agente.historia()
+        self.assertEqual([p["pe"] for p in h["pasos"]], camino)
+        self.assertEqual([p["decision"] for p in h["pasos"]], agente.decisiones)
+        self.assertEqual([p["pes"] for p in h["pasos"]], list(range(1, len(camino) + 1)))
+        for i, p in enumerate(h["pasos"]):
+            self.assertAlmostEqual(p["C"], agente.valuar_camino(camino[:i + 1])["C"])
+            self.assertEqual((p["fila"], p["columna"]), Malla.posicion(p["pe"]))
+            tipos = {agente.pesos[pe].tipo for pe in camino[:i + 1]}
+            self.assertEqual(p["cumple_tipos"], {"M", "E", "V"} <= tipos)
+        self.assertAlmostEqual(h["pasos"][-1]["C"], agente.valuar_camino()["C"])
+        validos = [p for p in h["pasos"] if p["cumple_tipos"]]
+        self.assertEqual(h["mejor"]["C"], min(p["C"] for p in validos))
+        self.assertEqual(h["malla"], [" ".join(f) for f in MALLA_3X3])
+        self.assertEqual((h["filas"], h["columnas"]), (3, 3))
+        json.dumps(h, allow_nan=False)  # se puede guardar como historia.json
+
+    def test_13_curva_y_gif_deterministicos(self):
+        """herramientas/gif_camino.py dibuja la curva y el GIF desde historia.json, igual byte por byte."""
+        import hashlib
+        import gif_camino
+        nops = {"op": {pe: (i * 7) % 5 for i, pe in enumerate(Malla(3, 3).ids())}}
+        agente = Agente(lambda c: evaluacion_falsa(MALLA_3X3, nops), BASE, parametros(epsilon=0.5, semilla=1))
+        agente.buscar()
+        with tempfile.TemporaryDirectory() as tmp:
+            corrida = Path(tmp)
+            (corrida / "historia.json").write_text(json.dumps(agente.historia()), encoding="utf-8")
+            resumen = []
+            for salida in ("a", "b"):
+                with mock.patch("sys.stdout"):
+                    self.assertEqual(gif_camino.main([str(corrida), "--salida", str(corrida / salida)]), 0)
+                resumen.append([hashlib.sha256((corrida / salida / n).read_bytes()).hexdigest()
+                                for n in ("curva_costo.png", "camino.gif")])
+            self.assertEqual(resumen[0], resumen[1])
+            from PIL import Image
+            with Image.open(corrida / "a" / "camino.gif") as g:
+                self.assertEqual(g.n_frames, len(agente.camino))
+        self.assertEqual(gif_camino._cuadros(10, 4), [0, 3, 6, 9])
+        self.assertEqual(gif_camino._cuadros(10, 3), [0, 4, 8, 9])
 
 
 class TestEnlaceRL(unittest.TestCase):

@@ -37,7 +37,7 @@ from formato_cgra import generar_malla  # noqa: E402 (cgra/src/ del simulador)
 from malla import Malla  # noqa: E402
 from topologia import DESPLAZAMIENTO, DIRECCIONES  # noqa: E402
 
-from .contrato import Costos
+from .contrato import COMPUTO_OPS, ESCALAR_OPS, MEMORIA_OPS, VECTORIAL_OPS, Costos
 from .mapeador import Opciones
 
 RUTA_PARAMETROS = Path(__file__).resolve().parents[1] / "config" / "agente.json"
@@ -196,21 +196,23 @@ class Agente:
         return self.camino
 
     # -- valuación del camino -----------------------------------------------------------
-    def valuar_camino(self):
+    def valuar_camino(self, camino=None):
         """Costo de los PEs del camino con la función de costo (contrato.py), sin volver a simular:
-        los ciclos, los NOPs de cada PE y C_R salen de la evaluación de la malla.
+        los ciclos, los NOPs de cada PE y C_R salen de la evaluación de la malla. ``camino``: los
+        PEs a valuar (por defecto ``self.camino``; ``historia`` valúa cada prefijo).
 
         C_A = Σ w_tipo de los PEs del camino; por operación, C_L = latencia(ciclos, NOPs del
         camino, PEs del camino); C = promedio de K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R."""
+        camino = self.camino if camino is None else camino
         n = self.evaluacion.normalizadores
         if not n:
             raise ValueError("la evaluación de la malla no trae normalizadores")
         k = self.costos.K
-        pes = len(self.camino)
-        c_a = sum(self.pesos[pe].w_tipo for pe in self.camino)
+        pes = len(camino)
+        c_a = sum(self.pesos[pe].w_tipo for pe in camino)
         por_operacion = {}
         for op, e in self.evaluacion.operaciones.items():
-            nops = sum(e.nops_por_pe[pe] for pe in self.camino)
+            nops = sum(e.nops_por_pe[pe] for pe in camino)
             c_l = self.costos.latencia(e.ciclos, nops, pes)
             ref = n["operaciones"][op]
             c_l_norm = c_l / ref["C_L_ref"]
@@ -229,6 +231,59 @@ class Agente:
             "formula": "C = promedio de K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R; C_A = Σ w_tipo del camino; "
                        "C_L = ciclos·(1 + NOPs del camino/(ciclos·PEs del camino)); ciclos, NOPs y C_R de la "
                        "evaluación de la malla (sin volver a simular)",
+        }
+
+    # -- historia del camino ----------------------------------------------------------
+    def cumple_tipos(self, tipos):
+        """Si un conjunto de tipos de PE cumple las reglas de tipos de costos.json: al menos un PE de
+        memoria y uno de cómputo (``requiere_memoria_y_computo``) y al menos un escalar (E) y un
+        vectorial (V) (``requiere_escalar_y_vectorial``). Las reglas de bordes no aplican: el camino
+        no es un rectángulo."""
+        r = self.costos.restricciones
+        por_tipo = [{i.upper() for i in self.base["tipos_pe"][t]["instrucciones"]} for t in tipos]
+        todas = set().union(*por_tipo)
+        if r.get("requiere_memoria_y_computo") and not (todas & MEMORIA_OPS and todas & COMPUTO_OPS):
+            return False
+        if r.get("requiere_escalar_y_vectorial") and not (
+                any(ops & ESCALAR_OPS for ops in por_tipo) and any(ops & VECTORIAL_OPS for ops in por_tipo)):
+            return False
+        return True
+
+    def historia(self):
+        """El camino paso a paso, para graficarlo después: en cada paso, el PE que se agregó, quién lo
+        eligió y la valuación del prefijo (los PEs del camino hasta ese paso) con ``valuar_camino``,
+        sin volver a simular. ``cumple_tipos`` dice si el prefijo cumple las reglas de tipos de PE;
+        ``mejor`` es el paso de menor C entre los que las cumplen (solo informativo: el resultado
+        sigue siendo el camino completo)."""
+        malla = self.malla()
+        pasos, tipos = [], set()
+        for i, (pe, decision) in enumerate(zip(self.camino, self.decisiones)):
+            p = self.pesos[pe]
+            tipos.add(p.tipo)
+            v = self.valuar_camino(self.camino[:i + 1])
+            pasos.append({
+                "paso": i, "pe": pe, "fila": Malla.posicion(pe)[0], "columna": Malla.posicion(pe)[1],
+                "tipo": p.tipo, "peso": p.peso, "decision": decision, "pes": i + 1,
+                "C": v["C"], "C_A": v["C_A"], "C_A_norm": v["C_A_norm"], "C_L_norm": v["C_L_norm"],
+                "C_R": v["C_R"], "costo_por_operacion": {op: o["costo"] for op, o in v["por_operacion"].items()},
+                "cumple_tipos": self.cumple_tipos(tipos),
+            })
+        validos = [p for p in pasos if p["cumple_tipos"]]
+        mejor = min(validos, key=lambda p: (p["C"], p["paso"])) if validos else None
+        return {
+            "malla": [" ".join(fila) for fila in malla],
+            "filas": len(malla),
+            "columnas": len(malla[0]),
+            "C_malla": self.evaluacion.costo,
+            "epsilon": self.parametros.epsilon,
+            "semilla": self.parametros.semilla,
+            "mejor": None if mejor is None else {k: mejor[k] for k in ("paso", "pe", "pes", "C", "C_A", "C_L_norm")},
+            "pasos": pasos,
+            "nota": "Cada paso valúa el prefijo del camino con los ciclos, NOPs y C_R de la simulación de la "
+                    "malla completa (sin volver a simular). cumple_tipos: reglas de tipos de PE de costos.json "
+                    "(memoria y cómputo, E y V); no las de bordes. decision: inicio, explotacion (Dijkstra "
+                    "greedy), rl (agente RL), rl_invalida (respuesta inválida, se usó Dijkstra greedy) o "
+                    "exploracion (sin agente RL, al azar).",
         }
 
     # -- resultado --------------------------------------------------------------------

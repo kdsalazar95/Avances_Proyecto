@@ -17,7 +17,7 @@ sur, este u oeste. Peso de un PE = w_tipo · (1 + NOPs/ciclos), con w_tipo de lo
 w1-w4 de costos.json y NOPs y ciclos del reporte de ciclos. La malla se simula una vez;
 después el camino empieza en PE00 y elige el siguiente PE con una política epsilon-greedy
 (epsilon y semilla en config/agente.json): con probabilidad epsilon decide el agente RL (un LLM,
-Copilot CLI, que elige entre los vecinos sin visitar) y si no, Dijkstra greedy (el de menor peso).
+Claude Code CLI por defecto, que elige entre los vecinos sin visitar) y si no, Dijkstra greedy (el de menor peso).
 Termina cuando el PE actual no tiene vecinos sin visitar.
 
     python3 agente_greedy.py [--salida resultados/greedy]
@@ -29,6 +29,8 @@ Resultados en --salida:
     pesos.json             el peso de cada PE y los datos con que se calculó
     camino.json            los PEs del camino en orden, con su tipo y peso, el mapa ('.' = fuera) y su
                            valuación con la función de costo (C, C_A, C_L, C_R), sin volver a simular
+    historia.json          el camino paso a paso: PE agregado, quién lo eligió y el costo del prefijo
+                           (C, C_A, C_L_norm, C_R) en cada paso; lo lee herramientas/gif_camino.py
     resumen.json           malla, inicio, PEs del camino por tipo, peso total, C del camino y tiempo
 """
 import argparse
@@ -142,6 +144,8 @@ def main(argv=None):
         "pesos": [asdict(p) for p in agente.pesos.values()],
     })
     _escribir_json(args.salida / "camino.json", resultado)
+    historia = agente.historia()
+    _escribir_json(args.salida / "historia.json", historia)
     _escribir_json(args.salida / "resumen.json", {
         "id": "dijkstra-greedy",
         "actualizado": _ahora(),
@@ -168,7 +172,12 @@ def main(argv=None):
     v = resultado["valuacion"]
     print(f"Valuación del camino: C = {v['C']:.6f} (C_A = {v['C_A']:g}, C_L_norm = {v['C_L_norm']:.6g}, "
           f"C_R = {v['C_R']:.3g}); malla completa: C = {costo}")
-    print(f"Resultados en {args.salida}: camino.json, pesos.json, evaluacion_malla.json, resumen.json")
+    mejor = historia["mejor"]
+    if mejor is not None:
+        print(f"Menor C entre los prefijos que cumplen los tipos de PE: {mejor['C']:.6f} en el paso "
+              f"{mejor['paso']} ({mejor['pes']} PEs, hasta {mejor['pe']})")
+    print(f"Resultados en {args.salida}: camino.json, historia.json, pesos.json, evaluacion_malla.json, "
+          f"resumen.json (curva y GIF: python3 herramientas/gif_camino.py {args.salida})")
     return 0
 
 

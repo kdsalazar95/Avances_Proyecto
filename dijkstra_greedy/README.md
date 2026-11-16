@@ -57,7 +57,24 @@ python3 agente_greedy.py --continuar --salida resultados/greedy   # reusa la sim
 | `camino.json` | **El resultado:** los PEs del camino en orden, con su tipo, NOPs, ciclos, peso y la decisión de cada paso (explotación o exploración); cuántos de cada tipo; el peso total; el mapa de la malla con `.` en los PEs que quedan fuera, y la valuación (C, C_A, C_L, C_R por operación) |
 | `pesos.json` | El peso de cada PE de la malla y los datos con que se calculó |
 | `evaluacion_malla.json` | La evaluación de la malla: estado, C, costos por operación y NOPs por PE del reporte de ciclos |
+| `historia.json` | El camino paso a paso, para graficarlo después: en cada paso, el PE agregado (fila, columna, tipo, peso), quién lo eligió (`explotacion` = Dijkstra greedy, `rl` = agente RL) y el costo del prefijo hasta ese paso (C, C_A, C_L_norm, C_R y el costo de cada operación), sin volver a simular; si el prefijo cumple los tipos de PE (memoria y cómputo, E y V), y `mejor`, el prefijo de menor C entre los que los cumplen (informativo: el resultado sigue siendo el camino completo). Trae la malla, para dibujarla sin otros archivos |
 | `resumen.json` | Malla, su C, PE de inicio, PEs del camino por tipo, peso total, C del camino y tiempo |
+
+### Curva de costo y GIF
+
+Después de la corrida, sin simular ni llamar al agente RL (desde `dijkstra_greedy/`):
+
+```bash
+python3 herramientas/gif_camino.py resultados/<corrida>   # curva_costo.png y camino.gif en esa carpeta
+```
+
+- `curva_costo.png`: C del prefijo del camino en cada paso, con los pasos del agente RL marcados y el de menor C válida.
+- `camino.gif`: un cuadro por paso, con la malla (los PEs del camino resaltados) y la curva hasta ese paso.
+
+Es determinística: la misma `historia.json` da los mismos archivos, byte por byte. Opciones: `--ms` (por
+cuadro), `--max-cuadros` (con caminos más largos salta pasos, siempre incluye el último), `--sin-gif`,
+`--salida`. Si la corrida es anterior a `historia.json`, la reconstruye desde `camino.json`,
+`evaluacion_malla.json` y `resumen.json` y la guarda.
 
 ## Costo (igual que la solución RL)
 
