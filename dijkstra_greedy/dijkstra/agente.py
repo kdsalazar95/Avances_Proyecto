@@ -38,6 +38,7 @@ from malla import Malla  # noqa: E402
 from topologia import DESPLAZAMIENTO, DIRECCIONES  # noqa: E402
 
 from .contrato import Costos
+from .mapeador import Opciones
 
 RUTA_PARAMETROS = Path(__file__).resolve().parents[1] / "config" / "agente.json"
 
@@ -49,6 +50,7 @@ class Parametros:
     epsilon: float = 0.1  # probabilidad de explorar (vecino libre al azar) en cada paso; 0 = Greedy puro
     semilla: int = 0  # semilla del azar de la exploración (mismo valor = mismo camino)
     procesos: int = None  # procesos para simular las operaciones en paralelo (None = una por operación)
+    mapeador_procesos: int = 1  # procesos que prueban los candidatos del mapeador (1 = secuencial; mismo resultado)
     t_max_simulacion_s: float = None  # tiempo máximo del simulador para la malla (None = el de costos.json)
     rl: object = None  # agente RL del paso con probabilidad epsilon: {"comando": [...], "timeout_s": s}; None = al azar
 
@@ -267,20 +269,24 @@ def _costos(ruta_costos, t_max):
 
 def _evaluar_operacion(argumentos):
     from .evaluador import Evaluador
-    operacion, carpeta, ruta_costos, t_max, configuracion = argumentos
-    evaluador = Evaluador([operacion], carpeta, _costos(ruta_costos, t_max))
+    operacion, carpeta, ruta_costos, t_max, configuracion, mapeador_procesos = argumentos
+    evaluador = Evaluador([operacion], carpeta, _costos(ruta_costos, t_max),
+                          opciones=Opciones(procesos=mapeador_procesos))
     return evaluador.evaluar(configuracion).operaciones[operacion]
 
 
-def medir_en_paralelo(configuracion, operaciones, carpeta, ruta_costos, t_max=None, procesos=None):
+def medir_en_paralelo(configuracion, operaciones, carpeta, ruta_costos, t_max=None, procesos=None,
+                      mapeador_procesos=1):
     """Evalúa la configuración con cada operación en su propio proceso y junta los costos
-    como ``Evaluador.evaluar`` (mismos normalizadores y ecuaciones)."""
+    como ``Evaluador.evaluar`` (mismos normalizadores y ecuaciones). ``mapeador_procesos``
+    reparte la búsqueda del mapeador entre procesos sin cambiar su resultado."""
     from .evaluador import EvaluacionOperacion, Evaluador, agregar
     costos = _costos(ruta_costos, t_max)
-    evaluador = Evaluador(list(operaciones), carpeta, costos)
+    evaluador = Evaluador(list(operaciones), carpeta, costos, opciones=Opciones(procesos=mapeador_procesos))
     if evaluador.motivos_invalida(configuracion):
         return evaluador.evaluar(configuracion)
-    argumentos = [(op, str(carpeta), str(ruta_costos), t_max, configuracion) for op in operaciones]
+    argumentos = [(op, str(carpeta), str(ruta_costos), t_max, configuracion, mapeador_procesos)
+                  for op in operaciones]
     with ProcessPoolExecutor(procesos or len(operaciones)) as pool:
         por_op = dict(zip(operaciones, pool.map(_evaluar_operacion, argumentos)))
     por_op = {op: EvaluacionOperacion(**asdict(e)) for op, e in por_op.items()}

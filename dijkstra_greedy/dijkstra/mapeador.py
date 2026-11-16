@@ -30,6 +30,7 @@ no se carguen cientos de ciclos antes de usarse.
 """
 
 import heapq
+import multiprocessing
 from dataclasses import dataclass, field
 
 from .vectorizar import es_vector
@@ -53,6 +54,9 @@ class Opciones:
     evaluación de PEs tras ese número de candidatos válidos (por defecto
     todos; cortar es mucho más rápido en mallas grandes, pero empeora el
     mapeo: matmul 6x10 pasa de 565 a 794 ciclos con 8).
+    ``procesos``: procesos que prueban los candidatos de cada operación en
+    paralelo (1 = secuencial). El resultado es idéntico al secuencial; solo
+    cambia el tiempo. Requiere ``fork`` (Linux).
     """
 
     reenvio_memoria: bool = True
@@ -61,6 +65,7 @@ class Opciones:
     intentos_huecos: int = 8
     ventana: int = None
     max_candidatos: int = None
+    procesos: int = 1
 
 
 @dataclass
@@ -131,6 +136,7 @@ class Mapeador:
         self.series = 0
         self.motivo = ""
         self._distancia_minima = {}
+        self._cuadrilla = None
 
     # -- cambios de estado que se pueden deshacer ---------------------------
     def _anotar(self, entrada):
@@ -202,7 +208,10 @@ class Mapeador:
             elif tipo == "attr":
                 setattr(entrada[1], entrada[2], entrada[3])
             elif tipo == "copia":
-                self.copias[entrada[1]].pop()
+                lista = self.copias[entrada[1]]
+                lista.pop()
+                if not lista:
+                    del self.copias[entrada[1]]
 
     # -- consultas -----------------------------------------------------------
     def _banco(self, copia):
@@ -242,6 +251,11 @@ class Mapeador:
 
     # -- algoritmo -----------------------------------------------------------
     def mapear(self):
+        if self.opciones.procesos > 1:
+            return _mapear_en_cuadrilla(self, self.opciones.procesos)
+        return self._mapear()
+
+    def _mapear(self):
         n = len(self.grafo)
         try:
             self.grafo.validar()
@@ -299,13 +313,27 @@ class Mapeador:
             cotas.append((self._primer_libre(destino, cota), destino))
         cotas.sort()
 
+        # Con cuadrilla, todos los candidatos se prueban desde el mismo estado, repartidos
+        # entre procesos. _intentar prueba ciclos crecientes: si su resultado (con el
+        # horizonte) cae después del límite de la selección, el límite lo habría descartado.
+        pruebas = None
+        if self._cuadrilla is not None:
+            pruebas = self._cuadrilla.repartir(
+                lambda i: self._intentar(op, cotas[i][1], cotas[i][0], entradas, self.horizonte, confirmar=False),
+                len(cotas))
+
         mejor = None
         evaluados = 0
-        for inicio, destino in cotas:
+        for i, (inicio, destino) in enumerate(cotas):
             if mejor is not None and (inicio > mejor[0][0] or evaluados >= self.max_candidatos):
                 break
             limite = mejor[0][0] if mejor is not None else self.horizonte
-            clave = self._intentar(op, destino, inicio, entradas, limite, confirmar=False)
+            if pruebas is None:
+                clave = self._intentar(op, destino, inicio, entradas, limite, confirmar=False)
+            else:
+                clave = pruebas[i]
+                if clave is not None and clave[0] > limite:
+                    clave = None
             if clave is not None:
                 evaluados += 1
                 if mejor is None or clave < mejor[0]:
@@ -349,11 +377,13 @@ class Mapeador:
                 intentos += 1
                 continue
             self.diario = []
+            serie = self.series
             clave = self._probar(op, destino, ciclo, entradas)
             if clave is not None and confirmar:
                 self.diario = None
                 return clave
             self._deshacer()
+            self.series = serie  # el número de copia no sobrevive al deshacer
             if clave is not None:
                 return clave
             ciclo += 1
@@ -674,3 +704,73 @@ def mapear(grafo, malla, compatibilidad, opciones=None):
     """Mapea ``grafo`` en ``malla``. Nunca lanza por una configuración mala:
     devuelve un ``ResultadoMapeo`` inválido con el motivo."""
     return Mapeador(grafo, malla, compatibilidad, opciones).mapear()
+
+
+class _Cuadrilla:
+    """Procesos que ejecutan el mismo mapeo paso a paso (cada uno con su copia
+    del estado). En cada ``_ubicar`` cada proceso prueba solo sus candidatos y
+    se intercambian los resultados: como todos ven los mismos resultados y el
+    estado es idéntico, todos toman las mismas decisiones."""
+
+    def __init__(self, rango, n, canal=None, canales=()):
+        self.rango = rango
+        self.n = n
+        self.canal = canal  # hijo: conexión con el padre
+        self.canales = list(canales)  # padre: una conexión por hijo
+
+    def repartir(self, probar, total):
+        """``probar(i)`` para los candidatos ``i`` de este proceso; devuelve el
+        resultado de todos (``{i: resultado}``)."""
+        propios = {i: probar(i) for i in range(self.rango, total, self.n)}
+        if self.canal is not None:
+            self.canal.send(propios)
+            return self._recibir(self.canal)
+        resultados = dict(propios)
+        for canal in self.canales:
+            resultados.update(self._recibir(canal))
+        for canal in self.canales:
+            canal.send(resultados)
+        return resultados
+
+    @staticmethod
+    def _recibir(canal):
+        try:
+            return canal.recv()
+        except EOFError:
+            raise RuntimeError("un proceso del mapeo terminó antes de tiempo") from None
+
+
+def _mapear_en_cuadrilla(mapeador, n):
+    contexto = multiprocessing.get_context("fork")
+    pares = [contexto.Pipe() for _ in range(n - 1)]
+    padres = [p for p, _ in pares]
+    hijos = [h for _, h in pares]
+    procesos = []
+    try:
+        for rango, canal in enumerate(hijos, start=1):
+            otros = [h for h in hijos if h is not canal]
+            proceso = contexto.Process(target=_correr_hijo,
+                                       args=(mapeador, rango, n, canal, padres, otros))
+            proceso.start()
+            procesos.append(proceso)
+        for canal in hijos:
+            canal.close()
+        mapeador._cuadrilla = _Cuadrilla(0, n, canales=padres)
+        return mapeador._mapear()
+    finally:
+        mapeador._cuadrilla = None
+        for canal in padres:
+            canal.close()
+        for proceso in procesos:
+            proceso.join()
+
+
+def _correr_hijo(mapeador, rango, n, canal, padres, otros):
+    for conexion in (*padres, *otros):
+        conexion.close()
+    mapeador._cuadrilla = _Cuadrilla(rango, n, canal=canal)
+    try:
+        mapeador._mapear()
+    except RuntimeError:
+        # El padre ya terminó: su conexión se cerró y no hay más que hacer.
+        pass

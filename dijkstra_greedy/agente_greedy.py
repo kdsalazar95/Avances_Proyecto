@@ -107,7 +107,8 @@ def main(argv=None):
     args.salida.mkdir(parents=True, exist_ok=True)
     inicio = time.monotonic()
     agente = Agente(lambda c: medir_en_paralelo(c, operaciones, CARPETA_PROGRAMAS, args.costos,
-                                                parametros.t_max_simulacion_s, parametros.procesos),
+                                                parametros.t_max_simulacion_s, parametros.procesos,
+                                                parametros.mapeador_procesos),
                     base, parametros, costos,
                     eleccion_rl=EleccionCopilot(**parametros.rl) if parametros.rl else None)
     malla = agente.malla()

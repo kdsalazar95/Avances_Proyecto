@@ -278,6 +278,22 @@ class TestMapeoDijkstra(unittest.TestCase):
         self.assertIn("ningún PE de la malla (M) ejecuta ADD", resultado.motivo)
         self.assertIsNone(resultado.metricas["ciclos"])
 
+    def test_1b_procesos_dan_el_mismo_mapeo(self):
+        """Repartir los candidatos entre procesos no debe cambiar el mapeo ni su resultado."""
+        tipos_s = dict(TIPOS, S={"nombre": "solo_store", "instrucciones": ["NOP", "MOV", "ST", "SEND", "RECV"]})
+        casos = [(ejemplo_a_mano(), malla("M E M", "M V M", "M E M")),
+                 (ejemplo_a_mano(), malla("M E M", "E V E", "M E M", "M V M")),
+                 (load_add_store(), malla("M S E", "M V E", tipos=tipos_s))]
+        for grafo, mallado in casos:
+            secuencial = mapear(grafo, mallado, self.compat)
+            for procesos in (2, 3, 4):
+                paralelo = mapear(grafo, mallado, self.compat, Opciones(procesos=procesos))
+                with self.subTest(procesos=procesos):
+                    self.assertEqual((paralelo.valido, paralelo.motivo, paralelo.ubicacion, paralelo.programa,
+                                      paralelo.metricas),
+                                     (secuencial.valido, secuencial.motivo, secuencial.ubicacion,
+                                      secuencial.programa, secuencial.metricas))
+
     def test_6_formato_invalido_no_se_cae(self):
         """Un .json de CGRA que no existe debe dar un resultado inválido, no una excepción."""
         resultado = evaluar_configuracion(ejemplo_a_mano(), "/no/existe/cgra.json")
