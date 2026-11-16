@@ -64,7 +64,7 @@ def main(argv=None):
     p.add_argument("--max-iteraciones", type=int)
     p = sub.add_parser("referencia")
     p.add_argument("salida")
-    p.add_argument("--computo", default="E,V,E", help="tipo de cómputo de cada fila (E, V o C)")
+    p.add_argument("--computo", default="E,V,E", help="tipo de cómputo de cada fila (E o V)")
     p.add_argument("--sin-este", action="store_true")
     p = sub.add_parser("lote", help="evalúa varias configuraciones (carpetas con cgra.json) en paralelo")
     p.add_argument("--corrida", required=True)

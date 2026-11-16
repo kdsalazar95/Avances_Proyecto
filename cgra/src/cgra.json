@@ -1,5 +1,5 @@
 {
-  "descripcion": "Formato de la CGRA: los tamaños de malla que se pueden usar, la memoria, el ancho de los vectores y los tipos de PE. 'filas' y 'columnas' son rangos: el tamaño concreto lo elige quien la usa (el agente RL, o --filas/--columnas en run_cgra.py); un archivo con números fijos describe una sola malla. Las columnas de los bordes (oeste y este) son solo de memoria (M); en el resto las filas rotan escalar (E) y vectorial (V) (fila 0 E, fila 1 V, fila 2 E...). Hay al menos 3 columnas, para que quede cómputo entre las dos columnas de memoria. Cómputo (C), que es escalar y vectorial a la vez, solo se usa cuando no hay filas suficientes para E y V: con 'adaptar_mallas_pequenas', una malla de 1 fila es M C ... C M; desde 2 filas se usa la rotación E, V. Una 'malla' explícita manda sobre ambas. Lo leen run_cgra.py (src/formato_cgra.py), el agente RL (rl/) y los skills (agent_skills/01-receive-inputs.md).",
+  "descripcion": "Formato de la CGRA: los tamaños de malla que se pueden usar, la memoria, el ancho de los vectores y los tipos de PE. 'filas' y 'columnas' son rangos: el tamaño concreto lo elige quien la usa (el agente RL, o --filas/--columnas en run_cgra.py); un archivo con números fijos describe una sola malla. Las mallas tienen al menos 3 columnas (M, cómputo y M) y las columnas de los bordes (oeste y este) son solo de memoria (M); en el resto las filas rotan escalar (E) y vectorial (V) (fila 0 E, fila 1 V, fila 2 E...). Con 'adaptar_mallas_pequenas' una malla de una sola fila no es válida (no tiene filas para E y V). Una 'malla' explícita manda sobre la distribución. Lo leen run_cgra.py (src/formato_cgra.py), el agente RL (rl/) y los skills (agent_skills/01-receive-inputs.md).",
   "filas": {
     "descripcion": "Rango de filas: de 1 a 32 (el máximo de la CGRA).",
     "minimo": 1,
@@ -14,11 +14,6 @@
   "ancho_vector": 4,
   "adaptar_mallas_pequenas": true,
   "tipos_pe": {
-    "G": {
-      "nombre": "generico",
-      "descripcion": "Accede a memoria y realiza cálculo escalar y vectorial, una instrucción por ciclo. Permite ejecutar cargas, cálculos y almacenamiento en un único PE cuando la malla es 1x1.",
-      "instrucciones": ["NOP", "MOV", "LD", "ST", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV", "VLD", "VST", "VADD", "VSUB", "VMUL", "VDIV", "VREDSUM", "VBCAST", "VSEND", "VRECV"]
-    },
     "M": {
       "nombre": "memoria",
       "descripcion": "Lee y escribe la memoria de datos, de a una palabra o de a ancho_vector palabras seguidas, y envía/recibe escalares y vectores. No calcula.",
@@ -33,11 +28,6 @@
       "nombre": "vectorial",
       "descripcion": "Opera vectores carril a carril y envía/recibe vectores; envía/recibe escalares solo para VREDSUM y VBCAST. No hace aritmética escalar ni accede a la memoria de datos.",
       "instrucciones": ["NOP", "MOV", "SEND", "RECV", "VADD", "VSUB", "VMUL", "VDIV", "VREDSUM", "VBCAST", "VSEND", "VRECV"]
-    },
-    "C": {
-      "nombre": "computo",
-      "descripcion": "Escalar y vectorial a la vez: opera registros escalares y vectores, y envía/recibe ambos. No accede a la memoria de datos.",
-      "instrucciones": ["NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV", "VADD", "VSUB", "VMUL", "VDIV", "VREDSUM", "VBCAST", "VSEND", "VRECV"]
     }
   },
   "distribucion": {

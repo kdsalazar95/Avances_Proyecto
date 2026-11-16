@@ -1,8 +1,8 @@
 """Escribe un ``cgra.json`` (una acción del agente) con filas ``M X M`` o ``M X``.
 
-``X`` es el PE de cómputo de cada fila: E (escalar), V (vectorial) o C
-(escalar + vectorial). Sirve, por ejemplo, para la referencia 3x3
-``M E M / M V M / M E M`` de la corrida (``uv run python -m rl referencia``).
+``X`` es el PE de cómputo de cada fila: E (escalar) o V (vectorial). Sirve,
+por ejemplo, para la referencia 32x32 de la corrida (filas alternas V y E, con
+M en las columnas 0 y 31) con ``uv run python -m rl referencia``.
 """
 
 import argparse

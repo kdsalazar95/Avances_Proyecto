@@ -67,7 +67,7 @@ def construir_prompt(contexto, entrada, id_candidata, dir_salida):
         f"- filas {r['filas']} · columnas {r['columnas']} · palabras_memoria <= {r.get('palabras_memoria_max')} · "
         f"ancho_vector en {r.get('anchos_vector_permitidos')}",
         f"- Memoria en los bordes: {r.get('memoria_solo_en_bordes_oeste_este')} (si es True: las columnas "
-        "oeste y este son todas M y el interior es solo cómputo; tú eliges qué tipo de cómputo, E, V o C, "
+        "oeste y este son todas M y el interior es solo cómputo; tú eliges qué tipo de cómputo, E o V, "
         "va en cada PE del interior) · "
         f"requiere memoria y cómputo: {r.get('requiere_memoria_y_computo')}",
         "- Tipos e instrucciones (copia exactamente estas listas en `tipos_pe`; no inventes tipos ni instrucciones):",
@@ -82,7 +82,7 @@ def construir_prompt(contexto, entrada, id_candidata, dir_salida):
         "",
         "### Costo C (fijo para la corrida; no lo puedes cambiar)",
         f"- C_A = w1·n_MS + w2·n_MV + w3·n_CS + w4·n_CV con w = {json.dumps(p['w'])} "
-        "(M aporta MS+MV, E: CS, V: CV, C: CS+CV, G: las cuatro)",
+        "(M aporta MS+MV, E: CS, V: CV)",
         f"- C_L = {DESCRIPCION_LATENCIA.get(p['formula_latencia'], p['formula_latencia'])} · C = K_A·C_A/C_A,ref + K_L·C_L/C_L,ref + K_R·C_R con K = {json.dumps(p['K'])}",
         f"- La política premia o penaliza cada acción: r = C_best_prev − C si es correcta; "
         f"r = −{p['penalizacion']['P_fallo']} si es inválida, falla o es incorrecta.",

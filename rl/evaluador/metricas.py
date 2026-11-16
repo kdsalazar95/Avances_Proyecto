@@ -6,8 +6,7 @@ declara cada tipo de PE en su lista de instrucciones (proxy aditivo):
     MS: LD o ST          MV: VLD o VST
     CS: ADD/SUB/MUL/DIV  CV: VADD/VSUB/VMUL/VDIV
 
-Así M (LD/ST/VLD/VST) aporta MS+MV, E aporta CS, V aporta CV, C aporta CS+CV
-y G aporta las cuatro.
+Así M (LD/ST/VLD/VST) aporta MS+MV, E aporta CS y V aporta CV.
 
 C_L según ``formula_latencia``:
 

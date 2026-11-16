@@ -109,18 +109,19 @@ class TestValidarAccion(unittest.TestCase):
         self.assertIn("la malla no tiene ningún PE de cómputo", validar_accion(c, self.contexto)["motivos"])
 
     def test_memoria_en_bordes_y_computo_libre_en_el_interior(self):
-        """Con memoria en los bordes, oeste y este deben ser todos M y el interior solo cómputo; el agente elige E, V o C en el interior."""
+        """Con memoria en los bordes, oeste y este deben ser todos M y el interior solo cómputo; el agente elige E o V en el interior."""
         r = self.contexto["restricciones"]
         todos = {letra: {"nombre": r["nombres_tipo"][letra], "instrucciones": ops}
                  for letra, ops in r["instrucciones_por_tipo"].items()}
         c = self.t.config()
-        editar_cgra(c, lambda d: d.update(malla=["M C V M", "M E C M"], filas=2, columnas=4, tipos_pe=todos))
+        editar_cgra(c, lambda d: d.update(malla=["M V V M", "M E V M"], filas=2, columnas=4, tipos_pe=todos))
         self.assertEqual(validar_accion(c, self.contexto)["motivos"], [])
-        editar_cgra(c, lambda d: d.update(malla=["E C M", "M V M"], filas=2, columnas=3))
+        editar_cgra(c, lambda d: d.update(malla=["E V M", "M V M"], filas=2, columnas=3))
         self.assertTrue(any("PE(0,0) es E: los bordes" in m for m in validar_accion(c, self.contexto)["motivos"]))
-        editar_cgra(c, lambda d: d.update(malla=["M G M", "M V M"]))
-        self.assertTrue(any("PE(0,1) es G y accede a memoria" in m for m in validar_accion(c, self.contexto)["motivos"]))
-        editar_cgra(c, lambda d: d.update(malla=["M C"] * 2, columnas=2))
+        editar_cgra(c, lambda d: d["tipos_pe"].update(E={**todos["E"], "instrucciones": todos["E"]["instrucciones"] + ["LD"]}))
+        editar_cgra(c, lambda d: d.update(malla=["M E M", "M V M"]))
+        self.assertTrue(any("PE(0,1) es E y accede a memoria" in m for m in validar_accion(c, self.contexto)["motivos"]))
+        editar_cgra(c, lambda d: d.update(malla=["M V"] * 2, columnas=2))
         self.assertTrue(any("al menos 3 columnas" in m for m in validar_accion(c, self.contexto)["motivos"]))
 
     def test_no_entrega_programas(self):

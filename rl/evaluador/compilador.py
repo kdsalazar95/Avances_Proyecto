@@ -18,7 +18,7 @@ Implementaciones:
 * ``CompiladorSkills`` (``"tipo": "comando"``): llama al LLM con los skills.
 * ``CompiladorReduccion`` (``"tipo": "reduccion_mcm"``): sustituto determinista
   para pruebas y corridas sin LLM (solo reducción en mallas de filas 'M X M' / 'M X',
-  X en E, V, C).
+  X en E o V).
 """
 
 import json
@@ -170,7 +170,7 @@ class CompiladorSkills:
 
 
 class CompiladorReduccion:
-    """Sustituto determinista de los skills: solo reducción en filas 'M X M' / 'M X' (X en E, V, C)."""
+    """Sustituto determinista de los skills: solo reducción en filas 'M X M' / 'M X' (X en E o V)."""
 
     def compilar(self, ruta_cgra, instancia, dir_salida, errores_previos=None):
         from .compilador_sustituto import NoSoportado, compilar

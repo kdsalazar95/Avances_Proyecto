@@ -6,8 +6,8 @@ import sys
 import tempfile
 import unittest
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 
 from cgra import CGRA
 from formato_cgra import FormatoCGRA, generar_malla, validar_tipos
@@ -18,7 +18,7 @@ from programa import Programa
 
 TIPOS = {
     "M": {"nombre": "memoria", "instrucciones": ["NOP", "LD", "ST"]},
-    "C": {"nombre": "computo", "instrucciones": ["NOP", "ADD"]},
+    "E": {"nombre": "escalar", "instrucciones": ["NOP", "ADD"]},
 }
 
 
@@ -32,7 +32,8 @@ class TestFormatoCGRA(unittest.TestCase):
         self.directorio.cleanup()
 
     def escribir_json(self, **cambios):
-        datos = {"filas": 2, "columnas": 3, "palabras_memoria": 16}
+        datos = {"filas": 2, "columnas": 3, "palabras_memoria": 16, "tipos_pe": TIPOS,
+                 "distribucion": {"oeste": "M", "este": "M", "resto": "E"}}
         datos.update(cambios)
         ruta = os.path.join(self.directorio.name, "cgra.json")
         with open(ruta, "w", encoding="utf-8") as archivo:
@@ -108,14 +109,14 @@ class TestFormatoCGRA(unittest.TestCase):
 
     def test_6_asigna_tipo_e_instrucciones_a_cada_pe(self):
         """Con una malla de tipos, cada PE debe tener el nombre y las instrucciones de su letra."""
-        formato = FormatoCGRA(3, 4, 16, TIPOS, [["M", "C", "C", "M"]] * 3)
+        formato = FormatoCGRA(3, 4, 16, TIPOS, [["M", "E", "E", "M"]] * 3)
 
         self.assertEqual(formato.nombre_tipo("PE00"), "memoria")
         self.assertEqual(formato.instrucciones("PE01"), {"nop", "add"})
 
     def test_7_rechaza_instrucciones_no_permitidas_por_tipo(self):
         """Si un PE usa una instrucción que su tipo no tiene, debe fallar al cargar (indicando el PE y la instrucción) y también si se intenta ejecutar."""
-        formato = FormatoCGRA(1, 2, 16, TIPOS, [["M", "C"]])
+        formato = FormatoCGRA(1, 2, 16, TIPOS, [["M", "E"]])
         programa = Programa({"PE00": {0: {"op": "add"}}})
 
         with self.assertRaisesRegex(ValueError, "PE00.*ADD no está permitido"):
@@ -129,43 +130,50 @@ class TestFormatoCGRA(unittest.TestCase):
     def test_8_rechaza_un_tipo_con_operacion_que_no_existe(self):
         """Un tipo de PE no puede declarar instrucciones que no están en el ISA."""
         with self.assertRaisesRegex(ValueError, "no existen: JMP"):
-            FormatoCGRA(1, 1, 16, {"C": {"instrucciones": ["JMP"]}}, [["C"]])
+            FormatoCGRA(1, 1, 16, {"E": {"instrucciones": ["JMP"]}}, [["E"]])
 
     def test_9_distribucion_por_bordes_o_malla_explicita(self):
-        """Con 'distribucion', las columnas oeste y este deben ser M y el resto C; si el JSON trae 'malla', se usa tal cual."""
-        distribucion = {"oeste": "M", "este": "M", "resto": "C"}
+        """Con 'distribucion', las columnas oeste y este deben ser M y el resto E; si el JSON trae 'malla', se usa tal cual."""
+        distribucion = {"oeste": "M", "este": "M", "resto": "E"}
         ruta = self.escribir_json(filas=3, columnas=4, tipos_pe=TIPOS, distribucion=distribucion)
-        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M C C M"] * 3)
+        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M E E M"] * 3)
 
-        ruta = self.escribir_json(filas=2, columnas=2, tipos_pe=TIPOS, distribucion=distribucion, malla=["M C", "C M"])
-        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M C", "C M"])
+        ruta = self.escribir_json(filas=2, columnas=3, tipos_pe=TIPOS, distribucion=distribucion, malla=["M E M", "M M E"])
+        self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M E M", "M M E"])
 
-    def test_10_ciclo_de_filas_escalar_vectorial_computo(self):
-        """Con 'ciclo_filas' las filas deben repetir las reglas en orden (E, V, C, E...) con M en oeste y este, sea cual sea el tamaño; una lista vacía o mezclarla con otras claves debe fallar."""
-        ciclo = {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": letra} for letra in "EVC"]}
-        self.assertEqual(generar_malla(6, 4, ciclo), [list(fila) for fila in ("MEEM", "MVVM", "MCCM") * 2])
+    def test_10_ciclo_de_filas_escalar_vectorial(self):
+        """Con 'ciclo_filas' las filas deben repetir las reglas en orden (E, V, E...) con M en oeste y este, sea cual sea el tamaño; una lista vacía o mezclarla con otras claves debe fallar."""
+        ciclo = {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": letra} for letra in "EV"]}
+        self.assertEqual(generar_malla(6, 4, ciclo), [list(fila) for fila in ("MEEM", "MVVM") * 3])
         self.assertEqual(generar_malla(2, 3, ciclo), [list("MEM"), list("MVM")])
         with self.assertRaisesRegex(ValueError, "al menos una regla"):
             generar_malla(2, 3, {"ciclo_filas": []})
         with self.assertRaisesRegex(ValueError, "mezcla"):
-            generar_malla(2, 3, {**ciclo, "resto": "C"})
+            generar_malla(2, 3, {**ciclo, "resto": "E"})
 
-    def test_10b_mallas_pequenas_usan_c_solo_con_una_fila_de_computo(self):
-        """Con 'adaptar_mallas_pequenas', C debe aparecer solo cuando hay una única fila de cómputo (no alcanzan para E y V); con dos o más, las filas de cómputo rotan E, V (G en 1x1). Desde 2 filas y 3 columnas se usa la 'distribucion' tal cual, y 'malla' explícita sigue mandando."""
-        tipos = {**TIPOS, "G": {"nombre": "generico", "instrucciones": ["NOP", "LD", "ST", "ADD"]},
-                 "E": {"nombre": "escalar", "instrucciones": ["NOP", "ADD"]},
+    def test_10b_mallas_pequenas_sin_dos_filas_de_computo_no_son_validas(self):
+        """Con 'adaptar_mallas_pequenas', las filas de cómputo rotan E, V; una malla de una sola fila no tiene filas para E y V y debe rechazarse. Un JSON con menos de 3 columnas no es válido. Desde 2 filas se usa la 'distribucion' tal cual, y 'malla' explícita sigue mandando."""
+        tipos = {"M": TIPOS["M"], "E": {"nombre": "escalar", "instrucciones": ["NOP", "ADD"]},
                  "V": {"nombre": "vectorial", "instrucciones": ["NOP"]}}
         ciclo = {"ciclo_filas": [{"oeste": "M", "este": "M", "resto": letra} for letra in "EV"]}
         casos = {
-            (1, 1): ["G"], (2, 1): ["M", "C"], (3, 1): ["M", "E", "V"], (4, 1): ["M", "E", "V", "E"],
-            (1, 2): ["M C"], (2, 2): ["M E", "M V"], (3, 2): ["M E", "M V", "M E"],
-            (1, 3): ["M C M"], (1, 5): ["M C C C M"], (2, 3): ["M E M", "M V M"],
-            (2, 5): ["M E E E M", "M V V V M"], (3, 3): ["M E M", "M V M", "M E M"],
+            (2, 3): ["M E M", "M V M"], (3, 3): ["M E M", "M V M", "M E M"], (2, 5): ["M E E E M", "M V V V M"],
+            (4, 4): ["M E E M", "M V V M", "M E E M", "M V V M"],
         }
         for (filas, columnas), mapa in casos.items():
             ruta = self.escribir_json(filas=filas, columnas=columnas, tipos_pe=tipos, distribucion=ciclo,
                                       adaptar_mallas_pequenas=True)
             self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), mapa, f"{filas}x{columnas}")
+        for filas, columnas in ((1, 3), (1, 5)):
+            ruta = self.escribir_json(filas=filas, columnas=columnas, tipos_pe=tipos, distribucion=ciclo,
+                                      adaptar_mallas_pequenas=True)
+            with self.assertRaisesRegex(ValueError, f"{filas}x{columnas} no es válida"):
+                FormatoCGRA.cargar(ruta)
+        for filas, columnas in ((2, 1), (2, 2), (3, 2), (1, 2)):
+            ruta = self.escribir_json(filas=filas, columnas=columnas, tipos_pe=tipos, distribucion=ciclo,
+                                      adaptar_mallas_pequenas=True)
+            with self.assertRaisesRegex(ValueError, "al menos 3 columnas"):
+                FormatoCGRA.cargar(ruta)
         ruta = self.escribir_json(filas=1, columnas=3, tipos_pe=tipos, distribucion=ciclo)
         self.assertEqual(FormatoCGRA.cargar(ruta).mapa(), ["M E M"])
         ruta = self.escribir_json(filas=1, columnas=3, tipos_pe=tipos, distribucion=ciclo,
@@ -176,18 +184,18 @@ class TestFormatoCGRA(unittest.TestCase):
             FormatoCGRA.cargar(ruta)
 
     def test_11_cada_tipo_de_src_cgra_json_ejecuta_solo_lo_suyo(self):
-        """En src/cgra.json, M solo debe acceder a memoria, E solo hacer aritmética escalar, V solo vectorial y C ambas; lo demás debe rechazarse. Con 3x3 hay M, E y V; C aparece con una sola fila (1x3)."""
+        """En src/cgra.json solo hay M, E y V: M solo debe acceder a memoria, E solo hacer aritmética escalar y V solo vectorial; lo demás debe rechazarse. Una malla de una sola fila (1x3) no es válida."""
         letras = {}
-        for filas, columnas in ((3, 3), (1, 3)):
-            formato = FormatoCGRA.cargar(filas=filas, columnas=columnas)
-            for pe in Malla(formato.filas, formato.columnas).ids():
-                letras.setdefault(formato.letra(pe), (pe, formato))
-        self.assertNotIn("C", " ".join(FormatoCGRA.cargar(filas=3, columnas=3).mapa()))
+        formato = FormatoCGRA.cargar(filas=3, columnas=3)
+        for pe in Malla(formato.filas, formato.columnas).ids():
+            letras.setdefault(formato.letra(pe), (pe, formato))
+        self.assertEqual(set(formato.tipos_pe), {"M", "E", "V"})
+        with self.assertRaisesRegex(ValueError, "no es válida"):
+            FormatoCGRA.cargar(filas=1, columnas=3)
         casos = {
             "M": (["LD rA, a[0]", "VLD v0, a[0]"], ["ADD rA, rA, rB", "VADD v0, v0, v1"]),
             "E": (["ADD rA, rA, rB"], ["VADD v0, v0, v1", "VSEND east, v0", "LD rA, a[0]"]),
             "V": (["VADD v0, v0, v1", "VREDSUM rC, v2", "SEND west, rC"], ["ADD rA, rA, rB", "LD rA, a[0]"]),
-            "C": (["ADD rA, rA, rB", "VADD v0, v0, v1", "VREDSUM rC, v2"], ["VLD v0, a[0]"]),
         }
         self.assertEqual(set(letras), set(casos))
         for letra, (aceptadas, rechazadas) in casos.items():

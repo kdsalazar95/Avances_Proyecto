@@ -7,13 +7,13 @@ import sys
 import tempfile
 import unittest
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cargador import Cargador
 from cgra import CGRA
-from datos_prueba import escribir_reduccion_2x2
+from datos_prueba import TIPOS_PRUEBA, escribir_reduccion_2x2
 from formato_cgra import FormatoCGRA
 from isa import ISA
 from malla import Malla
@@ -45,7 +45,7 @@ class TestEjecucionCGRA(ConReduccion2x2):
 
     def test_2_ejecuta_mapa_y_reduccion_hasta_resultado_final(self):
         """La CGRA debe calcular c[i] = a[i] + b[i] y reducir los 12 valores a 60."""
-        cgra = CGRA(FormatoCGRA(2, 2, 64))
+        cgra = CGRA(FormatoCGRA(2, 2, 64, TIPOS_PRUEBA))
         cgra.ejecutar(Cargador(cgra).cargar(self.ruta_memoria, self.ruta_instrucciones))
 
         self.assertEqual(cgra.memoria.region("c"), [2, 4, 6, 8] * 3)

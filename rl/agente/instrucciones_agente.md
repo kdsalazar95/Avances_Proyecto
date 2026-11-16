@@ -34,7 +34,7 @@ No se entregan `PE*.txt` ni manifest de asignación: la validación previa (`rl/
 2. Decide hacia dónde moverte para minimizar $C$ según los $K$: por ejemplo, menos PEs si pesa el área; más filas de cómputo o PEs vectoriales si pesa la latencia.
 3. Decide solo con la información del prompt: no leas el historial, los reportes de evaluación ni otras candidatas.
 4. Respeta las reglas de la corrida: las columnas oeste y este son todas de memoria (`M`) y el interior es solo cómputo (por eso hacen falta al menos 3 columnas); al menos un PE de cómputo; tamaño dentro del rango.
-5. **Tú eliges el tipo de cada PE del interior** (`E`, `V` o `C`), sin seguir una rotación fija: puedes mezclar tipos en una misma fila o columna. Ten en cuenta el costo (un `C` suma el área de un `E` y un `V`) y lo que necesita la operación (cómputo vectorial en `V`/`C`, el resto escalar en `E`/`C`, y rutas compatibles hasta la memoria, ver `cgra/agent_skills/mesh-compatibility.md`).
+5. **Tú eliges el tipo de cada PE del interior** (`E` o `V`), sin seguir una rotación fija: puedes mezclar tipos en una misma fila o columna. Ten en cuenta el costo (un `E` suma el área de su escalar y un `V` la de su vectorial) y lo que necesita la operación (cómputo vectorial en `V`, el resto escalar en `E`, y rutas compatibles hasta la memoria, ver `cgra/agent_skills/mesh-compatibility.md`).
 6. Escribe los dos archivos y termina. No ejecutes el evaluador ni el simulador.
 
 ## Reglas

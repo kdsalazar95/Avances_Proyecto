@@ -6,28 +6,22 @@ Assign the work units and the communication between PEs to a `filas x columnas`
 mesh whose PEs have **types** (see [Receive Inputs](01-receive-inputs.md)). Apply
 the [Mesh Compatibility Contract](mesh-compatibility.md) first. The geometric
 formulas below specialize the standard border layout; they must not be used
-for single-row or arbitrary explicit layouts. Always use the actual map. The
-mesh has at least 3 columns (see the contract); one- and two-column meshes
-are not valid targets.
+for one/two-column or arbitrary explicit layouts. Always use the actual map.
 
-## Single-Row and Explicit Layouts
+## Narrow and Explicit Layouts
 
 Use `topologia`, eligible PE lists, servers, routes and `output_pe` from the
-manifest. With one row (and at least 3 columns), keep M at
-both ends and use only C in the interior; with 3 columns (1x3) use both
-servers for the C. Wider single rows use the nearest border server and
-compatible relays through C, as in the existing shared-server rules. For other explicit maps, find compatible paths as specified by the
-contract; do not invent a border memory PE or arithmetic at a memory-only PE.
+manifest. Single-row meshes and meshes with fewer than 3 columns are not valid
+(skill 01); never map them. For other explicit maps, find compatible paths as
+specified by the contract; do not invent a border memory PE or arithmetic at a
+memory-only PE.
 
-For at least 2 rows and 3 columns, use the normal-mesh mapping with the E, V
-row rotation: scalar work on E rows, vector work on V rows, scalar tails on E.
-The C-only layout (a single row: 1xN) uses separate scalar and
-vector phases or a reserved subset of C for scalar work; do not assume an E
-row exists or schedule two instructions on a C in the same cycle.
+For at least 2 rows and 3 columns, use the border mapping below and the E/V
+row rotation: scalar work only on E rows, vector work only on V rows.
 
-Use eligible-list tiling for these cases, including a single worker. Record
-every unit, owner, phase and round. With one worker, input/output transfers and
-computation repeat until the full problem is covered.
+Use eligible-list tiling for the narrow cases, including a single worker.
+Record every unit, owner, phase and round. With one worker, input/output
+transfers and computation repeat until the full problem is covered.
 
 ## Standard Border Mesh
 
@@ -38,8 +32,6 @@ compute PEs:  PE(f, c) with 1 <= c <= columnas - 2   (the compute block)
 M = memoria:   LD, ST, VLD, VST, SEND, RECV, VSEND, VRECV, MOV, NOP  (moves data, never computes)
 E = escalar:   ADD, SUB, MUL, DIV, SEND, RECV, MOV, NOP              (scalar only, never touches memory)
 V = vectorial: VADD..VDIV, VREDSUM, VBCAST, SEND, RECV, VSEND, VRECV, MOV, NOP  (vector only)
-C = computo:   E + V                                                 (scalar and vector)
-G = generico:  memory + scalar compute, and vector instructions when configured
 ```
 
 `PE{fila}{columna}` is connected only to its north, south, east, and west
@@ -68,11 +60,10 @@ Never write `PE10` in a mesh of 11 or more, where it would be ambiguous. A
 
 ## The Two Rules of the Types
 
-1. **All arithmetic requires compute capability.** A memory-only M never
-   emits ADD/SUB/MUL/DIV. A G can perform arithmetic as well as access memory.
-2. **All memory accesses require memory capability.** E/V/C never emit `LD/ST`.
-   A G may load, compute and store locally. With separate roles, operands and
-   results use compatible send/receive routes.
+1. **All arithmetic requires compute capability.** An M never emits
+   ADD/SUB/MUL/DIV or vector arithmetic.
+2. **All memory accesses require memory capability.** E and V never emit
+   `LD/ST`/`VLD/VST`. Operands and results use compatible send/receive routes.
 
 ## Server of Each Compute PE in the Border Layout
 
@@ -107,9 +98,9 @@ With `3` columns every row is `memory, compute, memory`: the compute PE
 the east one idle:
 
 ```text
-west server  PE(f, 0):  loads and sends the first operand            (to C = east)
+west server  PE(f, 0):  loads and sends the first operand            (to P = east)
 east server  PE(f, 2):  loads and sends the second operand,
-                        receives the results and stores them         (to C = west)
+                        receives the results and stores them         (to P = west)
 ```
 
 The first operand is `a` in reduccion and matmul and the scalar factor in the
@@ -164,8 +155,8 @@ recorded reduction plan and output PE; PE00 is preferred, not mandatory.
 ## Matmul and Convolucion: Scalar Border Output Tiles
 
 This rectangular formula applies when all listed compute positions are scalar
-eligible. With V rows, use the vector/scalar work lists below. For single-row
-or irregular maps, use the ordered eligible lists from the compatibility contract.
+eligible. With V rows, use the vector/scalar work lists below. For narrow or
+irregular maps, use the ordered eligible lists from the compatibility contract.
 
 One compute PE per output element, with the **compute block** sliding over the
 output in tiles of `tile_filas x tile_columnas` (the compute block of the
@@ -221,12 +212,9 @@ on every tile.
 In `vectorial` mode (manifest, skill 01) the servers and the reduction route do
 not change; only the work units do. `W` is `ancho_vector`. The memory PEs (`M`)
 serve both scalars and vectors, so every compute PE is served by the `M` of its
-row as before. A vector compute PE (`V` or `C`) does the blocks of `W` elements
-(a C/G may also use scalar instructions, e.g. to accumulate VREDSUM results)
-and a scalar-assigned PE handles scalar units. The border examples use E for
-that group; the compatibility contract covers C/G phases. Number each assigned
-class apart, in row-major
-order:
+row as before. A vector compute PE (`V`) does the blocks of `W` elements and
+a scalar compute PE (`E`) handles the scalar units. Number each class apart,
+in row-major order:
 
 ```text
 vector compute PEs:  q = 0 .. P_v - 1      (vector_compute_pes)
@@ -235,7 +223,7 @@ scalar compute PEs:  r = 0 .. P_s - 1      (scalar_compute_pes)
 
 In the standard row-homogeneous layout, disjoint vector and scalar groups may
 work **at the same time** on separate rows. Other maps need explicit link/server
-reservations, and shared C/G need separate phases. Split the work so both groups
+reservations. Split the work so both groups
 end together: a vector PE is faster, but leaving the scalar rows idle wastes
 them. The cost of one unit comes from the tables of skill 07:
 
@@ -257,9 +245,8 @@ n      = the value from 0 to the number of whole units that gives the lowest
 ```
 
 Try every `n` for this adjacent, disjoint-resource specialization. If P_v is
-zero, run scalar work. If the scalar-only set is empty, use reachable C/G for
-the tail in a later phase or reserve them before splitting. A V cannot do the
-scalar tail. If no such route/capability exists, report the unsupported tail.
+zero, run scalar work. A V cannot do the scalar tail: if there is no
+reachable E for it, report the unsupported tail.
 Do not evaluate these formulas with a zero denominator. For shared/distant
 servers, include actual delivery and return costs; these table costs alone do
 not establish an optimal partition.
@@ -275,19 +262,19 @@ scalar:  the elements i = n*W .. N-1;  the t-th of them (t = i - n*W)
 ```
 
 Then every compute PE joins the reduction route above with its partial sum.
-`E` and `C` keep it in `acc`. A `V` has no scalar `ADD`, so it keeps it as a
+`E` keeps it in `acc`. A `V` has no scalar `ADD`, so it keeps it as a
 vector in `v4` and takes part in the route like this:
 
 ```text
 row hops in a V row:   VSEND west, v4 / VRECV east, v5, then VADD v4, v4, v5;
                        after the row hops, PE(f, 1) emits VREDSUM acc, v4
 column hop into a V:   the V does not add: it receives into rT and, on its own
-                       hop north, sends rT first and then acc; the E or C above
+                       hop north, sends rT first and then acc; the E above
                        adds both (one hop each)
 ```
 
-This particular scalar-forwarding route ends in E/C and assumes no consecutive
-V rows, as in the standard rotation E, V (row 0 is E, so the route ends in E). Arbitrary explicit maps must use
+This particular scalar-forwarding route ends in E and assumes no consecutive
+V rows, as in the standard rotation E, V (row 0 is always E). Arbitrary explicit maps must use
 the contract's scalar or vector reduction plan, including consecutive V nodes,
 rather than applying this specialization without checking capabilities.
 

@@ -10,7 +10,7 @@ de distribución. Antes de mandarla al evaluador se comprueba que sea coherente
 - el mapa coincide con el tamaño (lo verifica ``FormatoCGRA``);
 - hay al menos un PE de memoria y uno de cómputo;
 - si la corrida lo exige, las columnas oeste y este son todas de memoria (M)
-  y el interior es solo de cómputo: qué tipo de cómputo (E, V, C) va en cada
+  y el interior es solo de cómputo: qué tipo de cómputo (E o V) va en cada
   PE del interior lo decide el agente.
 
 Así no llegan al Skill 01 configuraciones cuyos datos no coinciden. No corrige
@@ -51,7 +51,7 @@ def _motivos_bordes(formato):
                 motivos.append(f"PE({f},{c}) es {letra}: los bordes oeste y este deben ser de memoria (M)")
             elif c not in bordes and accede_memoria:
                 motivos.append(f"PE({f},{c}) es {letra} y accede a memoria: la memoria solo puede ir en los "
-                               "bordes oeste/este; el interior es de cómputo (E, V o C)")
+                               "bordes oeste/este; el interior es de cómputo (E o V)")
     return motivos
 
 

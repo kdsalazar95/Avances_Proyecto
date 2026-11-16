@@ -30,28 +30,28 @@ generated program is still validated against the shared loader below.
 9. All loop iterations are scheduled exactly once. In `vectorial` mode, every
    element is in exactly one block (or segment) or in the tail, never in both.
 10. The final reduction result is stored by `output_pe` from the manifest.
-    Prefer PE00 when reachable and memory-capable; local G stores directly.
+    Prefer PE00 when reachable and memory-capable.
     A different endpoint is valid when the capability/routing plan requires it
     or the user requested it. Check that all contributing partials reach it.
 11. Every `LD`/`ST` names a region of `memoria.bin` and stays inside its size;
     the `W` words of a `VLD`/`VST` too.
     Read the regions from its symbol table (layout in `operaciones/memoria_cgra.h`), or
     load it with `ImagenMemoria.leer()` of `src/memoria.py`.
-12. Validate actual instruction permissions: memory accesses on M/G, scalar
-    arithmetic on E/C/G, vector arithmetic on V/C/G when configured. G can
-    combine both roles; C does not implicitly gain memory access. No scalar
-    arithmetic on V or vector arithmetic/relays on E. In scalar mode no vector
+12. Validate actual instruction permissions: memory accesses only on M, scalar
+    arithmetic only on E, vector arithmetic only on V when configured. No
+    scalar arithmetic on V or vector arithmetic/relays on E. The map uses only
+    M, E and V, with at least one E and one V; a 1x1, 2x1, 1x2 or single-row
+    mesh is an invalid size. In scalar mode no vector
     instruction is emitted.
 13. `memoria.bin` fits in `palabras_memoria` of `src/cgra.json`.
-14. Every assigned compute PE has compatible local accesses or outbound/return
-    routes to its memory server. Check vertical and turning routes too; a
+14. Every assigned compute PE has compatible outbound/return routes to its
+    memory server. Check vertical and turning routes too; a
     geometric path alone is insufficient for vector transfers.
 15. No work-list, tile-size or round formula divides/modulos by an empty PE
     set. Full vectors stay in a bank and an output row. Tails go to scalar
     capability; no implicit padding or unimplemented lane packing.
 16. Each output accumulator resets before reuse in a new tile, while input
-    blocks of a reduction preserve their local sum. Shared C/G scalar/vector
-    phases do not overlap. Validate partial final rounds and NOPs except for
+    blocks of a reduction preserve their local sum. Validate partial final rounds and NOPs except for
     required relays, shared-server or reduction work.
 17. The manifest, per-PE headers and actual `FormatoCGRA` map agree. Report
     unsupported implementation paths and impossible hardware mappings
@@ -77,7 +77,7 @@ Then run `uv run src/run_cgra.py <operacion> --filas <filas> --columnas <columna
 - **reduccion:** each selected compute PE accumulates its assigned values
   before combining partials using a compatible scalar/vector plan. A single
   contributor skips inter-compute reduction. The output memory-capable PE
-  stores the final sum; on a local G no network transfer is required.
+  stores the final sum.
 - **matmul and convolucion:** every output element is stored exactly once, all
   tiles are processed, and the PEs outside the output in an edge tile only emit
   `NOP`. Each operand reaches its compute PE, from that PE's server, before the

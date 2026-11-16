@@ -27,7 +27,7 @@ diagrama "Evaluación" del PDF anotado):
 # Corrida con los Skills 01–09 reales corridos por Codex (rl/herramientas/codex.sh; con Claude: corrida_reduccion_claude.json)
 uv run python -m rl iniciar --config rl/config/corrida_reduccion.json
 
-# Corrida sin LLM: un sustituto determinista hace el papel de los skills (solo reducción, filas 'M X M' / 'M X' con X en E, V, C)
+# Corrida sin LLM: un sustituto determinista hace el papel de los skills (solo reducción, filas 'M X M' / 'M X' con X en E o V)
 uv run python -m rl iniciar --config rl/config/corrida_reduccion_sin_llm.json
 
 # El agente: leer el contexto de decisión y escribir candidatas/it-0001/cgra.json (+ candidata.json)
@@ -103,8 +103,8 @@ Las corridas se escriben en `resultados/corridas/<id>/` (no se versionan). El di
 
 ## Decisiones tomadas (configurables en `corrida.json`)
 
-- C_A por capacidades declaradas: M = MS+MV = 12, C = CS+CV = 3, E = 1, V = 2, G = 15 (w = 4/8/1/2).
-  Referencia 3x3 `M E M / M V M / M E M` (sin PEs C): C_A = 6·12 + 2·1 + 1·2 = 76; con el sustituto, 129 ciclos.
+- C_A por capacidades declaradas: M = MS+MV = 12, E = 1, V = 2 (w = 4/8/1/2). Sin PEs C ni G.
+  Referencia 32x32 con filas alternas V/E (M en columnas 0 y 31; el interior sigue el tipo de fila).
 - Regiones de salida comparadas: reducción `c` y `result`; matmul y convolución `result`.
 - Si los skills reportan que no pueden mapear, no se reintenta; si generan `.txt` inválidos, se reintenta
   con la lista de errores hasta `N_corr` veces.
@@ -115,8 +115,8 @@ Las corridas se escriben en `resultados/corridas/<id>/` (no se versionan). El di
 
 - K, tolerancias, `tolerancia_empate_costo`, `P_fallo` (cota empírica: `resumen.json → avisos_penalizacion`),
   `N_corr`, límites e instancias.
-- Probar la corrida principal con `claude` instalado: que los Skills 01–09 compilen la referencia 3x3
-  `M E M / M V M / M E M` de cada operación con el prompt de `evaluador/compilador.py`. No se ejecutó aquí.
+- Probar la corrida principal con `claude` instalado: que los Skills 01–09 compilen la referencia 32x32
+  (filas alternas V/E) de cada operación con el prompt de `evaluador/compilador.py`. No se ejecutó aquí.
 - Parametrización de los `.c`: `operaciones.c` tiene tamaños fijos (`#define`); una corrida evalúa una instancia.
 - El `cgra/src/cgra.json` del árbol de trabajo usa rangos en `filas`/`columnas`: sirve de esquema, pero
   `run_cgra.py` no lo carga directamente (dos pruebas de `cgra/test` fallan por eso). Cada configuración del

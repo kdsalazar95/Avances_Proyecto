@@ -47,12 +47,41 @@
     "t_max_total_s": null
   },
   "referencia": {
-    "descripcion": "Malla 3x3 con memoria en los bordes oeste/este y cómputo escalar (E) y vectorial (V) en la columna central, sin PEs C. Pasa por el mismo evaluador que las candidatas.",
+    "descripcion": "Malla 32x32 con memoria en las columnas oeste (0) y este (31) de cada fila, y cómputo en el interior: filas pares vectoriales (V), filas impares escalares (E). Sin PEs C. Pasa por el mismo evaluador que las candidatas.",
     "generar": {
       "malla": [
-        "M E M",
-        "M V M",
-        "M E M"
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M"
       ]
     }
   },
@@ -89,7 +118,7 @@
     "eps_abs, eps_rel y tolerancia_empate_costo",
     "P_fallo y su cota sobre los costos correctos (hoy la garantía es empírica)",
     "max_iteraciones, paciencia, t_max_simulacion_s, N_corr y conjunto de instancias",
-    "comprobar que los Skills 01–09 compilan la referencia 3x3 'M E M / M V M / M E M' para cada operación"
+    "comprobar que los Skills 01–09 compilan la referencia 32x32 (filas alternas V/E) para cada operación"
   ],
   "operaciones": [
     "reduccion",

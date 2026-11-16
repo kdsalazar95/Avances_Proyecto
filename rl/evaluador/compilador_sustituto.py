@@ -2,7 +2,7 @@
 
 Se usa con ``"compilador": {"tipo": "reduccion_mcm"}``. Solo compila la
 reducción en mallas de filas ``M X M`` o ``M X``, donde ``X`` es el PE de
-cómputo de cada fila: E (escalar), V (vectorial) o C (escalar + vectorial).
+cómputo de cada fila: E (escalar) o V (vectorial).
 Con otra configuración falla, como fallarían unos skills que no saben mapearla.
 La corrida real usa los Skills 01–09.
 
@@ -11,12 +11,12 @@ Schedule del sustituto:
 1. Inicio: las filas escalares ponen ``acc`` en 0; las vectoriales ``v7`` en 0.
 2. Trabajo, cada fila con su M oeste (en paralelo entre filas):
    - fila E: elemento i en 7 ciclos (M: LD a, SEND, LD b, SEND; X: ADD; X -> M; M: ST c);
-   - fila V o C: bloque de ``ancho_vector`` elementos en 7 ciclos con VLD/VSEND/VADD/VST.
+   - fila V: bloque de ``ancho_vector`` elementos en 7 ciclos con VLD/VSEND/VADD/VST.
    Los bloques se reparten con un criterio voraz (a la fila que termina antes); los
-   elementos que no llenan un bloque van a filas escalares (E o C).
-3. Cierre: V y C pasan su vector acumulado a escalar con VREDSUM.
+   elementos que no llenan un bloque van a filas escalares (E).
+3. Cierre: V pasa su vector acumulado a escalar con VREDSUM.
 4. Reducción: cada fila envía su parcial, relevado fila por fila, a la fila
-   escalar más alta (E o C), que lo suma. Si no hay filas escalares, los
+   escalar más alta (E), que lo suma. Si no hay filas escalares, los
    parciales viajan como vectores (VSEND) a la fila vectorial más alta.
 5. Esa fila envía el total a su M oeste, que guarda ``result``.
 """
@@ -26,14 +26,13 @@ from pathlib import Path
 
 from ..comun import ARCHIVO_MANIFEST, CARPETA_PROGRAMAS
 
-COMPUTO = ("E", "V", "C")
-ESCALARES = ("E", "C")
-VECTORIALES = ("V", "C")
+COMPUTO = ("E", "V")
+ESCALARES = ("E",)
+VECTORIALES = ("V",)
 NECESARIAS = {
     "M": {"LD", "ST", "SEND", "RECV"},
     "E": {"MOV", "ADD", "SEND", "RECV"},
     "V": {"MOV", "VADD", "VBCAST", "VREDSUM", "SEND", "RECV", "VSEND", "VRECV"},
-    "C": {"MOV", "ADD", "VADD", "VBCAST", "VREDSUM", "SEND", "RECV", "VSEND", "VRECV"},
 }
 NECESARIAS_M_VECTOR = {"VLD", "VST", "VSEND", "VRECV"}
 CICLOS_UNIDAD = 7
@@ -56,7 +55,7 @@ def _forma(cgra):
         raise NoSoportado(f"solo compila filas 'M X M' o 'M X'; la malla es {malla}")
     for fila in filas:
         if fila[0] != "M" or (ancho == 3 and fila[2] != "M") or fila[1] not in COMPUTO:
-            raise NoSoportado(f"solo compila filas 'M X M' o 'M X' con X en E, V, C; la malla es {malla}")
+            raise NoSoportado(f"solo compila filas 'M X M' o 'M X' con X en E o V; la malla es {malla}")
     computo = [fila[1] for fila in filas]
     tipos = cgra.get("tipos_pe", {})
     for letra in set(computo) | {"M"}:
@@ -92,7 +91,7 @@ def repartir(computo, n_elementos, w):
             trabajo[f] += [("escalar", i) for i in range(b * w, b * w + w)]
     resto = range(bloques * (w or 0) if vectoriales else 0, n_elementos)
     if len(resto) and not escalares:
-        raise NoSoportado(f"{len(resto)} elementos no llenan un bloque de {w} y no hay PEs escalares (E o C)")
+        raise NoSoportado(f"{len(resto)} elementos no llenan un bloque de {w} y no hay PEs escalares (E)")
     for i in resto:
         f = min(escalares, key=lambda f: (fin[f] + CICLOS_UNIDAD, f))
         fin[f] += CICLOS_UNIDAD
@@ -135,12 +134,10 @@ def programas_reduccion(computo, n_elementos, con_este=True, w=4):
     trabajo = repartir(computo, n_elementos, w)
     modo_escalar = any(x in ESCALARES for x in computo)
 
-    # 1. Inicio: E pone acc en 0; V y C ponen v7 en 0 (MOV rT + VBCAST); C además acc en 0.
+    # 1. Inicio: E pone acc en 0; V pone v7 en 0 (MOV rT + VBCAST).
     ciclo({(f, 1): ("MOV acc, 0.0" if x == "E" else "MOV rT, 0.0") for f, x in enumerate(computo)})
     if any(x in VECTORIALES for x in computo):
         ciclo({(f, 1): "VBCAST v7, rT" for f, x in enumerate(computo) if x in VECTORIALES})
-    if "C" in computo:
-        ciclo({(f, 1): "MOV acc, 0.0" for f, x in enumerate(computo) if x == "C"})
 
     # 2. Trabajo: cada fila con su M oeste; se rellena con NOP hasta la fila más larga.
     secuencias = {}
@@ -163,10 +160,7 @@ def programas_reduccion(computo, n_elementos, con_este=True, w=4):
     # 3. Cierre: el vector acumulado pasa a escalar (en modo escalar).
     destino_vector = None
     if modo_escalar:
-        ciclo({(f, 1): ("VREDSUM rC, v7" if computo[f] == "C" else "VREDSUM acc, v7")
-               for f in range(filas) if computo[f] in VECTORIALES})
-        if "C" in computo:
-            ciclo({(f, 1): "ADD acc, acc, rC" for f in range(filas) if computo[f] == "C"})
+        ciclo({(f, 1): "VREDSUM acc, v7" for f in range(filas) if computo[f] in VECTORIALES})
         destino = min(f for f, x in enumerate(computo) if x in ESCALARES)
     else:
         destino = destino_vector = 0

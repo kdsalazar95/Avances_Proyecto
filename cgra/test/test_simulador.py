@@ -8,11 +8,11 @@ import sys
 import tempfile
 import unittest
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from datos_prueba import escribir_reduccion_2x2
+from datos_prueba import TIPOS_PRUEBA, escribir_reduccion_2x2
 from run_cgra import SimuladorCGRA
 
 
@@ -27,7 +27,8 @@ class TestSimulador(unittest.TestCase):
         escribir_reduccion_2x2(os.path.join(self.programas, "reduccion"))
         self.formato = os.path.join(raiz, "cgra.json")
         with open(self.formato, "w", encoding="utf-8") as archivo:
-            json.dump({"filas": 2, "columnas": 2, "palabras_memoria": 64}, archivo)
+            json.dump({"filas": 2, "columnas": 3, "palabras_memoria": 64, "tipos_pe": TIPOS_PRUEBA,
+                       "malla": [["U", "U", "U"], ["U", "U", "U"]]}, archivo)
         # Una tabla OPERACIONES con una operación que no fue compilada.
         self.fuente = os.path.join(raiz, "operaciones.c")
         with open(self.fuente, "w", encoding="utf-8") as archivo:
@@ -42,7 +43,9 @@ class TestSimulador(unittest.TestCase):
 
     def test_1_lee_las_operaciones_de_operaciones_c(self):
         """La lista de operaciones debe salir de la tabla OPERACIONES de operaciones.c, en su orden."""
-        self.assertEqual(SimuladorCGRA.operaciones(), ["reduccion", "matmul", "convolucion"])
+        # El simulador está en src/ de la raíz y operaciones.c en cgra/: se pasa la ruta (ver FLUJO_ETAPAS.md).
+        fuente = os.path.join(_raiz_cgra, "operaciones", "operaciones.c")
+        self.assertEqual(SimuladorCGRA.operaciones(fuente), ["reduccion", "matmul", "convolucion"])
         self.assertEqual(SimuladorCGRA.operaciones(self.fuente), ["reduccion", "sin_compilar"])
 
     def test_2_corre_una_operacion_por_su_nombre(self):

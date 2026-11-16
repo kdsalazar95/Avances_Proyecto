@@ -7,8 +7,8 @@ import sys
 import tempfile
 import unittest
 
-_raiz_proyecto = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_raiz_proyecto, "src"))
+_raiz_cgra = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_raiz_cgra, "src"))  # simulador (cgra/src)
 
 from cargador import Cargador
 from cgra import CGRA
@@ -19,19 +19,19 @@ from memoria import ImagenMemoria
 from programa import Programa
 from reporte_ciclos import ReporteCiclos
 
-# Tipos M/C con sus instrucciones vectoriales: M carga y envía, C calcula.
+# Tipos M/U (solo para pruebas) con sus instrucciones vectoriales: M carga y envía, U calcula.
 TIPOS_VECTORIALES = {
     "M": {"nombre": "memoria", "instrucciones": [
         "NOP", "MOV", "LD", "ST", "SEND", "RECV", "VLD", "VST", "VSEND", "VRECV",
     ]},
-    "C": {"nombre": "computo", "instrucciones": [
+    "U": {"nombre": "computo", "instrucciones": [
         "NOP", "MOV", "ADD", "SUB", "MUL", "DIV", "SEND", "RECV",
         "VADD", "VSUB", "VMUL", "VDIV", "VREDSUM", "VBCAST", "VSEND", "VRECV",
     ]},
 }
 
 # c = a + b y result = suma de c, con vectores de 4: PE00 (M) carga y guarda,
-# PE01 (C) suma. Dos bloques de 4 elementos.
+# PE01 (U) suma. Dos bloques de 4 elementos.
 PROGRAMA_SUMA = {
     "PE00": [
         "VLD v0, a[0]", "VSEND east, v0", "VLD v1, b[0]", "VSEND east, v1", "NOP",
@@ -111,14 +111,14 @@ class TestPEVectorial(unittest.TestCase):
 
 
 class TestCGRAVectorial(unittest.TestCase):
-    """cgra.json declara ancho_vector y los tipos M/C vectoriales; el cargador valida y enlaza los V..."""
+    """cgra.json declara ancho_vector y los tipos M/U vectoriales; el cargador valida y enlaza los V..."""
 
     def test_1_tipos_vectoriales_necesitan_ancho_vector(self):
         """Un tipo con instrucciones vectoriales sin ancho_vector debe rechazarse; con ancho_vector, la leyenda debe mostrarlo."""
         with self.assertRaisesRegex(ValueError, "falta 'ancho_vector'"):
-            FormatoCGRA(1, 2, 16, TIPOS_VECTORIALES, [["M", "C"]])
+            FormatoCGRA(1, 2, 16, TIPOS_VECTORIALES, [["M", "U"]])
 
-        formato = FormatoCGRA(1, 2, 16, TIPOS_VECTORIALES, [["M", "C"]], ancho_vector=4)
+        formato = FormatoCGRA(1, 2, 16, TIPOS_VECTORIALES, [["M", "U"]], ancho_vector=4)
         self.assertIn("Vectores de 4 palabras (v0..v7)", formato.leyenda())
         self.assertIn("vld", formato.instrucciones("PE00"))
         self.assertNotIn("vadd", formato.instrucciones("PE00"))
@@ -140,18 +140,18 @@ class TestCGRAVectorial(unittest.TestCase):
             Programa({"PE00": {0: ISA.parsear("VLD v0, a[5]")}}).enlazar(simbolos, ancho_vector=4)
 
     def test_4_filas_alternas_escalares_y_vectoriales(self):
-        """Con 'filas_pares' y 'filas_impares' en 'distribucion', los bordes oeste/este deben ser M y el resto E en las filas pares y C en las impares, sea cual sea el tamaño; mezclarlas con otras claves debe fallar."""
+        """Con 'filas_pares' y 'filas_impares' en 'distribucion', los bordes oeste/este deben ser M y el resto E en las filas pares y V en las impares, sea cual sea el tamaño; mezclarlas con otras claves debe fallar."""
         distribucion = {
             "filas_pares": {"oeste": "M", "este": "M", "resto": "E"},
-            "filas_impares": {"oeste": "M", "este": "M", "resto": "C"},
+            "filas_impares": {"oeste": "M", "este": "M", "resto": "V"},
         }
-        self.assertEqual(generar_malla(4, 4, distribucion), [list("MEEM"), list("MCCM"), list("MEEM"), list("MCCM")])
+        self.assertEqual(generar_malla(4, 4, distribucion), [list("MEEM"), list("MVVM"), list("MEEM"), list("MVVM")])
         self.assertEqual(generar_malla(1, 3, distribucion), [list("MEM")])
         with self.assertRaisesRegex(ValueError, "mezcla"):
-            generar_malla(2, 4, {**distribucion, "resto": "C"})
+            generar_malla(2, 4, {**distribucion, "resto": "V"})
 
     def test_5_suma_vectorial_de_punta_a_punta(self):
-        """Con un M y un C vectoriales (vectores de 4), el programa debe calcular c = a + b y result = 396, en 17 ciclos, y el reporte mostrar qué lee cada PE y qué instrucciones ejecuta."""
+        """Con un M y un U vectoriales (vectores de 4), el programa debe calcular c = a + b y result = 396, en 17 ciclos, y el reporte mostrar qué lee cada PE y qué instrucciones ejecuta."""
         a = [1, 2, 3, 4, 5, 6, 7, 8]
         b = [10, 20, 30, 40, 50, 60, 70, 80]
         with tempfile.TemporaryDirectory() as directorio:
@@ -165,7 +165,7 @@ class TestCGRAVectorial(unittest.TestCase):
                     for ciclo, instruccion in enumerate(instrucciones):
                         archivo.write(f"{ciclo:02d}: {instruccion}\n")
 
-            cgra = CGRA(FormatoCGRA(1, 2, 64, TIPOS_VECTORIALES, [["M", "C"]], ancho_vector=4))
+            cgra = CGRA(FormatoCGRA(1, 2, 64, TIPOS_VECTORIALES, [["M", "U"]], ancho_vector=4))
             programa = Cargador(cgra).cargar(ruta_memoria, directorio)
             cgra.ejecutar(programa)
 

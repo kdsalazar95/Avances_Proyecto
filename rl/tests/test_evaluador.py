@@ -249,7 +249,7 @@ class TestEvaluador(unittest.TestCase):
 
     def test_accion_es_solo_el_cgra_json(self):
         """El evaluador recibe solo el cgra.json: lo copia sin cambios y los skills generan los PE*.txt."""
-        accion = self.t.config(("V", "V", "V"), False)
+        accion = self.t.config(("V", "V", "V"), True)
         antes = sha256_archivo(accion / "cgra.json")
         r = self._evaluar(accion, nombre="mc")
         self.assertEqual(r["accion"]["hashes"], {"cgra.json": antes})
@@ -257,10 +257,10 @@ class TestEvaluador(unittest.TestCase):
         self.assertEqual(sha256_archivo(accion / "cgra.json"), antes)
         self.assertFalse((accion / "pe_instructions").exists())
         self.assertEqual(r["estado_evaluacion"], estados.CORRECTA)
-        # 3x2 'M V': C_A = 3·12 + 3·2 = 42; 73 ciclos -> C = 42/76 + 73/129
-        self.assertEqual((r["metricas"]["C_A"], r["metricas"]["ciclos"]), (42, 73))
-        self.assertAlmostEqual(r["costo_total"], 42 / 76 + 73 / 129)
-        self.assertAlmostEqual(r["recompensa"], 2.0 - (42 / 76 + 73 / 129))
+        # 3x3 'M V M': C_A = 6·12 + 3·2 = 78; 73 ciclos -> C = 78/76 + 73/129
+        self.assertEqual((r["metricas"]["C_A"], r["metricas"]["ciclos"]), (78, 73))
+        self.assertAlmostEqual(r["costo_total"], 78 / 76 + 73 / 129)
+        self.assertAlmostEqual(r["recompensa"], 2.0 - (78 / 76 + 73 / 129))
 
     def test_skills_reportan(self):
         """Si los skills no saben mapear la configuración ("Reportar") es fallo_evaluador penalizado."""
@@ -317,7 +317,7 @@ class TestEvaluador(unittest.TestCase):
 
     def test_tiempo_maximo(self):
         corta = corrida(limites={**self.corrida["limites"], "t_max_simulacion_s": 0.001})
-        r = self._evaluar(self.t.config(("V", "V", "V"), False), nombre="lento", corrida_=corta)
+        r = self._evaluar(self.t.config(("V", "V", "V"), True), nombre="lento", corrida_=corta)
         self.assertEqual(r["estado_evaluacion"], estados.FALLO_SIMULADOR)
         self.assertEqual(r["errores"][0]["regla"], "tiempo_excedido")
 

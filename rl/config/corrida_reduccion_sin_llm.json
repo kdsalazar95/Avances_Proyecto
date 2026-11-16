@@ -1,6 +1,6 @@
 {
   "id": "r01-reduccion-sin-llm",
-  "descripcion": "Igual que corrida_reduccion.json, pero el paso Skills 01–09 lo hace un sustituto determinista (solo reducción en mallas de filas 'M X M' / 'M X', con X en E, V o C). Sirve para probar el ciclo sin LLM; no reemplaza al evaluador real.",
+  "descripcion": "Igual que corrida_reduccion.json, pero el paso Skills 01–09 lo hace un sustituto determinista (solo reducción en mallas de filas 'M X M' / 'M X', con X en E o V). Sirve para probar el ciclo sin LLM; no reemplaza al evaluador real.",
   "operacion": "reduccion",
   "fuente_c": "cgra/operaciones/operaciones.c",
   "esquema_cgra": "cgra/src/cgra.json",
