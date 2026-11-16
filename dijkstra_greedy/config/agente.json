@@ -1,5 +1,5 @@
 {
-  "descripcion": "Parámetros del agente: camino por los PEs de una malla con una política epsilon-greedy (con probabilidad epsilon un vecino libre al azar; si no, el de menor peso). Los pesos w1-w4, K, tolerancias, restricciones y normalizadores están en costos.json, con los mismos valores de la solución RL.",
+  "descripcion": "Parámetros del agente: camino por los PEs de una malla con una política epsilon-greedy (con probabilidad epsilon decide el agente RL, un LLM vía Copilot CLI; si no, Dijkstra greedy: el vecino libre de menor peso). Los pesos w1-w4, K, tolerancias, restricciones y normalizadores están en costos.json, con los mismos valores de la solución RL.",
   "malla": [
     32,
     32
@@ -12,11 +12,16 @@
   "semilla": 0,
   "procesos": null,
   "t_max_simulacion_s": 36000,
+  "rl": {
+    "comando": ["copilot", "-p", "{prompt}", "--allow-all", "--silent"],
+    "timeout_s": 300
+  },
   "comentarios": {
     "malla": "La malla del grafo: [filas, columnas] con la distribución de cgra.json (por defecto [32, 32], la más pesada) o una lista de filas como [\"M E M\", \"M V M\"]. Cada PE es un vértice y cada conexión con un vecino norte, sur, este u oeste es una arista.",
     "peso": "Peso de un PE = w_tipo · (1 + NOPs/ciclos). w_tipo es el área de su tipo con pesos_area (w1-w4) de costos.json: M = 12, E = 1, V = 2. NOPs y ciclos salen del reporte_ciclos.txt del simulador, sumados sobre las operaciones. Para tenerlos, la malla se mapea con Dijkstra y se simula una vez (en 32x32, horas); --continuar reusa esa simulación.",
     "inicio": "[fila, columna] del PE donde empieza el camino; [0, 0] es PE00 (PE0000 en mallas de 11 o más filas o columnas). El camino termina cuando el PE actual no tiene vecinos sin visitar. Ningún PE se visita dos veces: no hay ciclos.",
-    "epsilon": "Política epsilon-greedy: en cada paso, con probabilidad epsilon se explora (se elige al azar uno de los vecinos sin visitar) y si no se explota (el vecino sin visitar de menor peso; en empate, el primero fila por fila). 0 = Greedy puro; 1 = siempre al azar.",
+    "epsilon": "Política epsilon-greedy: en cada paso, con probabilidad epsilon decide el agente RL y si no Dijkstra greedy (el vecino sin visitar de menor peso; en empate, el primero fila por fila). 0 = Greedy puro. Sin 'rl', la rama RL es una exploración al azar entre los vecinos libres.",
+  "rl": "Agente RL del enlace epsilon-greedy: 'comando' es el CLI que recibe el prompt del paso en {prompt} (GitHub Copilot CLI: copilot -p {prompt} --allow-all --silent); debe responder con el identificador de un vecino libre. 'timeout_s' por respuesta. null = sin agente RL.",
     "semilla": "Semilla del azar de la exploración: con la misma semilla y los mismos pesos sale el mismo camino. Cambiarla da otro camino con el mismo epsilon.",
     "procesos": "Procesos para simular las operaciones de la malla en paralelo (null = uno por operación).",
     "t_max_simulacion_s": "Tiempo máximo del simulador para la malla, en segundos (el de costos.json es 60, pensado para mallas chicas)."

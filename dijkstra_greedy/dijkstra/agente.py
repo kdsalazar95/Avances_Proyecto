@@ -14,8 +14,9 @@ Para tener los pesos, la malla se mapea con Dijkstra y se simula **una vez**
 (en 32x32 tarda horas). Después, el **camino** (no recursivo, sin ciclos):
 empieza en ``inicio`` (por defecto PE00, fila 0 y columna 0), revisa los vecinos
 que todavía no visitó y elige el siguiente con una política **epsilon-greedy**:
-con probabilidad ``epsilon`` explora (un vecino libre al azar) y si no, explota
-(el de menor peso). Repite hasta que el PE actual ya no tiene vecinos sin
+con probabilidad ``epsilon`` decide el **agente RL** (un LLM que elige entre los
+vecinos libres; ver ``rl_copilot.py``) y si no, **Dijkstra greedy** (el de menor peso).
+Sin agente RL, la rama de RL es una exploración al azar. Repite hasta que el PE actual ya no tiene vecinos sin
 visitar. Ningún PE se visita dos veces. Con ``epsilon = 0`` es Greedy puro; la
 ``semilla`` hace que el mismo camino se repita en cada corrida.
 
@@ -49,6 +50,7 @@ class Parametros:
     semilla: int = 0  # semilla del azar de la exploración (mismo valor = mismo camino)
     procesos: int = None  # procesos para simular las operaciones en paralelo (None = una por operación)
     t_max_simulacion_s: float = None  # tiempo máximo del simulador para la malla (None = el de costos.json)
+    rl: object = None  # agente RL del paso con probabilidad epsilon: {"comando": [...], "timeout_s": s}; None = al azar
 
     @classmethod
     def cargar(cls, ruta=RUTA_PARAMETROS):
@@ -71,17 +73,21 @@ class PesoPE:
 class Agente:
     """Epsilon-greedy sobre el grafo de PEs de una malla (determinístico para una misma semilla)."""
 
-    def __init__(self, medir, base=None, parametros=None, costos=None):
+    def __init__(self, medir, base=None, parametros=None, costos=None, eleccion_rl=None):
         """``medir(configuración) -> Evaluacion``: el evaluador (Dijkstra + simulador); la
-        Evaluacion debe traer ``nops_por_pe`` en cada operación. ``base``: el dict de cgra.json."""
+        Evaluacion debe traer ``nops_por_pe`` en cada operación. ``base``: el dict de cgra.json.
+        ``eleccion_rl(actual, libres, pesos, camino) -> PE``: el agente RL; ``None`` si no hay."""
         self.medir = medir
         self.base = base if base is not None else leer_cgra()
         self.parametros = parametros or Parametros()
         self.costos = costos or Costos.cargar()
+        self.eleccion_rl = eleccion_rl
         self.evaluacion = None  # la evaluación de la malla (una sola simulación)
         self.pesos = {}  # PE -> PesoPE
         self.camino = []  # PEs del camino, en orden
-        self.decisiones = []  # por paso: "inicio", "explotacion" o "exploracion"
+        # por paso: "inicio", "explotacion" (Dijkstra greedy), "rl" (agente RL), "rl_invalida"
+        # (el agente RL no devolvió un vecino libre: se usa Dijkstra greedy) o "exploracion" (sin RL)
+        self.decisiones = []
 
     # -- la malla ---------------------------------------------------------------------
     def de_distribucion(self, filas, columnas):
@@ -138,9 +144,9 @@ class Agente:
 
     def caminar(self, pesos, filas, columnas):
         """Desde ``inicio``, epsilon-greedy entre los vecinos sin visitar, hasta que el PE actual no
-        tiene vecinos sin visitar. En cada paso, con probabilidad ``epsilon`` explora (uno de los
-        libres al azar) y si no, explota (el de menor peso; en empate, el primero fila por fila).
-        Deja en ``self.decisiones`` qué se hizo en cada paso."""
+        tiene vecinos sin visitar. En cada paso, con probabilidad ``epsilon`` decide el agente RL
+        (o, sin agente RL, uno de los libres al azar), y si no, Dijkstra greedy (el de menor peso;
+        en empate, el primero fila por fila). Deja en ``self.decisiones`` qué se hizo en cada paso."""
         epsilon = self.parametros.epsilon
         if not 0 <= epsilon <= 1:
             raise ValueError(f"epsilon = {epsilon} debe estar entre 0 y 1")
@@ -158,8 +164,17 @@ class Agente:
             if not libres:
                 return camino
             if azar.random() < epsilon:
-                actual = azar.choice(sorted(libres, key=orden.get))
-                self.decisiones.append("exploracion")
+                if self.eleccion_rl is None:
+                    actual = azar.choice(sorted(libres, key=orden.get))
+                    self.decisiones.append("exploracion")
+                else:
+                    propuesta = self.eleccion_rl(actual, sorted(libres, key=orden.get), self.pesos, camino)
+                    if propuesta in libres:
+                        actual = propuesta
+                        self.decisiones.append("rl")
+                    else:
+                        actual = min(libres, key=lambda v: (self.pesos[v].peso, orden[v]))
+                        self.decisiones.append("rl_invalida")
             else:
                 actual = min(libres, key=lambda v: (pesos[v].peso, orden[v]))
                 self.decisiones.append("explotacion")
@@ -234,6 +249,8 @@ class Agente:
             "epsilon": self.parametros.epsilon,
             "semilla": self.parametros.semilla,
             "exploraciones": self.decisiones.count("exploracion"),
+            "rl": self.decisiones.count("rl"),
+            "rl_invalidas": self.decisiones.count("rl_invalida"),
             "camino": [{"paso": i, "decision": d, **asdict(self.pesos[pe])}
                        for i, (pe, d) in enumerate(zip(self.camino, self.decisiones))],
             "mapa": mapa,

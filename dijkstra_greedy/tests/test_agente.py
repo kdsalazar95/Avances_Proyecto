@@ -4,17 +4,20 @@ de una malla, siempre al vecino sin visitar de menor peso w_tipo · (1 + NOPs/ci
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _raiz_dg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(_raiz_dg), "cgra", "src"))  # simulador (cgra/src)
 sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (dijkstra_greedy/)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dijkstra.agente import Agente, Parametros, medir_en_paralelo
+from dijkstra.agente import Agente, Parametros, PesoPE, medir_en_paralelo
+from dijkstra.rl_copilot import EleccionCopilot, construir_prompt, interpretar
 from dijkstra.compilar import FUENTE, ErrorCompilacion, grafos, preparar
 from dijkstra.evaluador import RUTA_COSTOS, Evaluacion, EvaluacionOperacion, Evaluador
 from formato_cgra import RUTA_POR_DEFECTO
@@ -198,6 +201,106 @@ class TestAgenteGreedy(unittest.TestCase):
         self.assertEqual([p["decision"] for p in r["camino"]], agente.decisiones)
         with self.assertRaisesRegex(ValueError, "epsilon"):
             correr(epsilon=1.5)
+
+
+class TestEnlaceRL(unittest.TestCase):
+    """Con epsilon, el agente RL decide el paso (en lugar de la exploración al azar); el resto, Dijkstra greedy."""
+
+    def agente(self, eleccion, **cambios):
+        malla = Agente(None, BASE, parametros(malla=[5, 6])).malla()
+        nops = {"op": {pe: (i * 7) % 5 for i, pe in enumerate(Malla(5, 6).ids())}}
+        return Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(malla=[5, 6], **cambios),
+                      eleccion_rl=eleccion)
+
+    def test_1_rl_decide_con_probabilidad_epsilon(self):
+        """Con epsilon 0.5 hay pasos del RL y pasos de Dijkstra greedy, y el RL decide lo que devolvió."""
+        llamadas = []
+
+        def rl(actual, libres, pesos, camino):
+            elegido = libres[-1]
+            llamadas.append((actual, list(libres), elegido))
+            return elegido
+
+        agente = self.agente(rl, epsilon=0.5, semilla=3)
+        camino = agente.buscar()
+        self.assertEqual(set(agente.decisiones[1:]), {"rl", "explotacion"})
+        pasos_rl = [i for i, d in enumerate(agente.decisiones) if d == "rl"]
+        self.assertEqual(len(llamadas), len(pasos_rl))
+        for paso, (actual, libres, elegido) in zip(pasos_rl, llamadas):
+            self.assertEqual(camino[paso], elegido)
+            self.assertEqual(camino[paso - 1], actual)
+            self.assertIn(elegido, libres)
+        self.assertEqual(agente.resultado()["rl"], len(pasos_rl))
+
+    def test_2_con_epsilon_0_no_se_llama_al_rl(self):
+        """Epsilon 0 es Greedy puro: el agente RL nunca se consulta."""
+        def rl(*args):
+            raise AssertionError("el agente RL no debía consultarse")
+
+        agente = self.agente(rl, epsilon=0.0)
+        agente.buscar()
+        self.assertEqual(set(agente.decisiones[1:]), {"explotacion"})
+
+    def test_3_respuesta_invalida_cae_a_greedy(self):
+        """Si el RL no devuelve un vecino libre, ese paso es Dijkstra greedy. Con epsilon 1 y un RL que
+        siempre falla, el camino es el mismo que el de Greedy puro."""
+        agente = self.agente(lambda *args: None, epsilon=1.0)
+        camino = agente.buscar()
+        self.assertEqual(set(agente.decisiones[1:]), {"rl_invalida"})
+        self.assertEqual(agente.resultado()["rl_invalidas"], len(camino) - 1)
+        self.assertEqual(camino, self.agente(None, epsilon=0.0).buscar())
+
+    def test_4_sin_rl_la_rama_es_exploracion(self):
+        """Sin agente RL, la rama de epsilon sigue siendo la exploración al azar."""
+        agente = self.agente(None, epsilon=1.0)
+        agente.buscar()
+        self.assertEqual(set(agente.decisiones[1:]), {"exploracion"})
+
+
+class TestEleccionCopilot(unittest.TestCase):
+    """El adaptador del agente RL: arma el prompt del paso y lee el PE de la respuesta."""
+
+    LIBRES = ["PE01", "PE10"]
+    PESOS = {"PE01": PesoPE("PE01", "E", 1, 0, 1, 1.0), "PE10": PesoPE("PE10", "M", 12, 0, 1, 12.0)}
+
+    def test_1_prompt_con_los_vecinos_libres(self):
+        prompt = construir_prompt("PE00", self.LIBRES, self.PESOS, ["PE00"])
+        self.assertIn("PE01", prompt)
+        self.assertIn("PE10", prompt)
+        self.assertIn("Responde solo", prompt)
+        self.assertIn("PE00", prompt)
+
+    def test_2_interpreta_el_primer_vecino_libre(self):
+        self.assertEqual(interpretar("Elijo PE01.\n", self.LIBRES), "PE01")
+        self.assertEqual(interpretar("PE00 ya está visitado; PE10", self.LIBRES), "PE10")
+        self.assertIsNone(interpretar("no sé", self.LIBRES))
+        self.assertIsNone(interpretar("PE99", self.LIBRES))
+
+    def test_3_ejecuta_el_comando_con_el_prompt(self):
+        eleccion = EleccionCopilot(["copilot", "-p", "{prompt}", "--silent"])
+        with mock.patch("dijkstra.rl_copilot.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0, stdout="PE10\n", stderr="")) as run:
+            elegido = eleccion("PE00", self.LIBRES, self.PESOS, ["PE00"])
+        self.assertEqual(elegido, "PE10")
+        argumentos = run.call_args.args[0]
+        self.assertEqual(argumentos[:2], ["copilot", "-p"])
+        self.assertIn("PE01", argumentos[2])
+        self.assertNotIn("{prompt}", argumentos)
+
+    def test_4_fallas_del_comando(self):
+        """Sin el comando o con código de salida distinto de 0 falla; el tiempo agotado es una respuesta vacía."""
+        eleccion = EleccionCopilot(["copilot", "-p", "{prompt}"])
+        with mock.patch("dijkstra.rl_copilot.subprocess.run", side_effect=FileNotFoundError()):
+            with self.assertRaisesRegex(RuntimeError, "no se encontró"):
+                eleccion("PE00", self.LIBRES, self.PESOS, ["PE00"])
+        with mock.patch("dijkstra.rl_copilot.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="no autenticado")):
+            with self.assertRaisesRegex(RuntimeError, "no autenticado"):
+                eleccion("PE00", self.LIBRES, self.PESOS, ["PE00"])
+        with mock.patch("dijkstra.rl_copilot.subprocess.run", side_effect=subprocess.TimeoutExpired("x", 1)):
+            self.assertIsNone(eleccion("PE00", self.LIBRES, self.PESOS, ["PE00"]))
+        with self.assertRaisesRegex(ValueError, "{prompt}"):
+            EleccionCopilot(["copilot", "-p"])
 
 
 class TestAgenteConEvaluador(_ConOperaciones):

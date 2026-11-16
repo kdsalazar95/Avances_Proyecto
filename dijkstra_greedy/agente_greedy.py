@@ -16,8 +16,9 @@ config/agente.json); cada vértice es un PE y cada arista la conexión con un ve
 sur, este u oeste. Peso de un PE = w_tipo · (1 + NOPs/ciclos), con w_tipo de los pesos
 w1-w4 de costos.json y NOPs y ciclos del reporte de ciclos. La malla se simula una vez;
 después el camino empieza en PE00 y elige el siguiente PE con una política epsilon-greedy
-(epsilon y semilla en config/agente.json): con probabilidad epsilon un vecino sin visitar
-al azar, si no el de menor peso. Termina cuando el PE actual no tiene vecinos sin visitar.
+(epsilon y semilla en config/agente.json): con probabilidad epsilon decide el agente RL (un LLM,
+Copilot CLI, que elige entre los vecinos sin visitar) y si no, Dijkstra greedy (el de menor peso).
+Termina cuando el PE actual no tiene vecinos sin visitar.
 
     python3 agente_greedy.py [--salida resultados/greedy]
     python3 agente_greedy.py --continuar --salida resultados/greedy   # reusa la simulación guardada
@@ -44,6 +45,7 @@ from dijkstra.agente import Agente, Parametros, RUTA_PARAMETROS, medir_en_parale
 from dijkstra.compilar import ErrorCompilacion, preparar
 from dijkstra.contrato import RUTA_COSTOS, Costos
 from dijkstra.evaluador import Evaluacion, EvaluacionOperacion
+from dijkstra.rl_copilot import EleccionCopilot
 
 ARCHIVO_EVALUACION = "evaluacion_malla.json"
 
@@ -106,7 +108,8 @@ def main(argv=None):
     inicio = time.monotonic()
     agente = Agente(lambda c: medir_en_paralelo(c, operaciones, CARPETA_PROGRAMAS, args.costos,
                                                 parametros.t_max_simulacion_s, parametros.procesos),
-                    base, parametros, costos)
+                    base, parametros, costos,
+                    eleccion_rl=EleccionCopilot(**parametros.rl) if parametros.rl else None)
     malla = agente.malla()
     configuracion = agente.configuracion(malla)
     ruta_evaluacion = args.salida / ARCHIVO_EVALUACION
@@ -146,13 +149,16 @@ def main(argv=None):
         "epsilon": resultado["epsilon"],
         "semilla": resultado["semilla"],
         "exploraciones": resultado["exploraciones"],
+        "elecciones_rl": resultado["rl"],
+        "elecciones_rl_invalidas": resultado["rl_invalidas"],
         "C_camino": resultado["valuacion"]["C"],
         "parametros_agente": vars(parametros),
         "tiempo_total_s": round(time.monotonic() - inicio, 1),
     })
     print(f"Camino epsilon-greedy (epsilon = {resultado['epsilon']}, semilla = {resultado['semilla']}) desde "
           f"{resultado['inicio']}: {resultado['pes']} PEs {resultado['por_tipo']}, "
-          f"{resultado['exploraciones']} exploraciones, peso total {resultado['peso_total']:.6g}")
+          f"{resultado['exploraciones']} exploraciones, {resultado['rl']} elecciones del agente RL "
+          f"({resultado['rl_invalidas']} inválidas, con Dijkstra greedy), peso total {resultado['peso_total']:.6g}")
     v = resultado["valuacion"]
     print(f"Valuación del camino: C = {v['C']:.6f} (C_A = {v['C_A']:g}, C_L_norm = {v['C_L_norm']:.6g}, "
           f"C_R = {v['C_R']:.3g}); malla completa: C = {costo}")
