@@ -15,10 +15,33 @@ Para tener los pesos, la malla se mapea con Dijkstra y se simula **una vez**
 empieza en ``inicio`` (por defecto PE00, fila 0 y columna 0), revisa los vecinos
 que todavía no visitó y elige el siguiente con una política **epsilon-greedy**:
 con probabilidad ``epsilon`` decide el **agente RL** (un LLM que elige entre los
-vecinos libres; ver ``rl_copilot.py``) y si no, **Dijkstra greedy** (el de menor peso).
-Sin agente RL, la rama de RL es una exploración al azar. Repite hasta que el PE actual ya no tiene vecinos sin
-visitar. Ningún PE se visita dos veces. Con ``epsilon = 0`` es Greedy puro; la
-``semilla`` hace que el mismo camino se repita en cada corrida.
+vecinos libres; ver ``rl_llm.py``) y si no, **greedy**: el vecino que deja el menor
+costo C del camino (la función de costo del PDF, ``valuar_camino``; un camino que no cumple
+los tipos de PE cuesta ``P_fallo``, como en el contrato). Sin agente RL, la rama de RL es una
+exploración al azar. **Paro:** el camino termina cuando ya cumple los tipos de PE y ningún vecino
+libre baja su C ("si el costo sube, se descarta"), o cuando el PE actual ya no tiene vecinos sin
+visitar. **Seguir o parar:** en el punto de paro, con probabilidad ``epsilon`` decide el agente
+RL (o, sin él, el azar) si el camino para o sigue ``n`` PEs más (``1 ≤ n ≤ max_extension``): el
+estimado siempre prefiere menos PEs (su latencia es la de la malla completa), y así el agente puede
+probar configuraciones más grandes cuando el C real de los episodios anteriores lo justifica.
+Durante esos ``n`` pasos no se revisa el paro; después se revisa otra vez.
+Ningún PE se visita dos veces. Con ``epsilon = 0`` es Greedy puro; la
+``semilla`` hace que el mismo camino se repita en cada corrida. En cada paso se guarda la
+recompensa ``r_t = C(t−1) − C(t)`` (positiva si el paso bajó el costo).
+
+**Episodio** (``evaluar_episodio``): el camino terminado se convierte en una malla simulable, el
+rectángulo que lo contiene (``malla_episodio``: sus filas y columnas, sin las columnas de memoria,
+con una columna M al oeste y otra al este), y esa malla se simula con el mismo evaluador. Su C es
+el costo **real** del episodio, y la recompensa del episodio es ``R = C_best_prev − C`` (como en la
+solución RL), con ``C_best_prev`` = el mejor C real de los episodios anteriores (al principio, el
+C de la malla completa).
+
+**Ciclo de episodios** (``correr``): se repiten episodios hasta ``max_episodios`` o hasta que pasen
+``paciencia`` episodios seguidos sin que el mejor C baje. Cada episodio usa la semilla
+``semilla + n`` (si no, todos darían el mismo camino). Si el C real de un episodio es menor que el
+mejor, ese episodio pasa a ser el mejor; si no, se descarta (pág. 5 del PDF). Un rectángulo ya
+simulado no se vuelve a simular (``repetido``). El agente RL recibe en cada paso los últimos
+``historial_llm`` episodios y el mejor, con su C real: esa es la retroalimentación del evaluador.
 
 Resultado: los PEs del camino, con su tipo y su peso. No tienen que formar un
 rectángulo; los PEs que no están en el camino quedan fuera. El camino se valúa
@@ -28,6 +51,7 @@ simulación, sin volver a simular.
 
 import json
 import random
+import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -37,7 +61,8 @@ from formato_cgra import generar_malla  # noqa: E402 (cgra/src/ del simulador)
 from malla import Malla  # noqa: E402
 from topologia import DESPLAZAMIENTO, DIRECCIONES  # noqa: E402
 
-from .contrato import COMPUTO_OPS, ESCALAR_OPS, MEMORIA_OPS, VECTORIAL_OPS, Costos
+from .contrato import (COMPUTO_OPS, CORRECTA, ESCALAR_OPS, MEMORIA_OPS, NO_ATRIBUIBLES, VECTORIAL_OPS, Costos,
+                       recompensa)
 from .mapeador import Opciones
 
 RUTA_PARAMETROS = Path(__file__).resolve().parents[1] / "config" / "agente.json"
@@ -47,12 +72,20 @@ RUTA_PARAMETROS = Path(__file__).resolve().parents[1] / "config" / "agente.json"
 class Parametros:
     malla: object = (32, 32)  # [filas, columnas] (distribución de cgra.json) o lista de filas "M E M"
     inicio: object = (0, 0)  # [fila, columna] del PE donde empieza el camino (PE00)
-    epsilon: float = 0.1  # probabilidad de explorar (vecino libre al azar) en cada paso; 0 = Greedy puro
+    epsilon: float = 0.3  # probabilidad de que decida el agente RL (o, sin él, el azar) en cada paso; 0 = Greedy puro
     semilla: int = 0  # semilla del azar de la exploración (mismo valor = mismo camino)
     procesos: int = None  # procesos para simular las operaciones en paralelo (None = una por operación)
     mapeador_procesos: int = 1  # procesos que prueban los candidatos del mapeador (1 = secuencial; mismo resultado)
     t_max_simulacion_s: float = None  # tiempo máximo del simulador para la malla (None = el de costos.json)
     rl: object = None  # agente RL del paso con probabilidad epsilon: {"comando": [...], "timeout_s": s}; None = al azar
+    max_episodios: int = 10  # tope de episodios por corrida (como max_iteraciones de rl/)
+    paciencia: int = 3  # episodios seguidos sin que baje el mejor C para terminar (como en rl/)
+    historial_llm: int = 5  # últimos episodios que recibe el agente RL en el prompt (además del mejor)
+    max_extension: int = 10  # PEs que el agente RL (o el azar) puede pedir de más en el punto de paro
+    modo: str = "camino"  # "camino": crecer desde PE00 · "bloques": reducir la malla de referencia por bloques
+    bloques: object = (16, 8, 4, 2, 1)  # tamaños de bloque del modo "bloques", de mayor a menor
+    tipos: bool = False  # modo "bloques": después del descenso, fase de tipos (cambiar PEs interiores E <-> V)
+    max_cambios_tipo: int = 40  # tope de mallas simuladas en la fase de tipos de un episodio
 
     @classmethod
     def cargar(cls, ruta=RUTA_PARAMETROS):
@@ -78,7 +111,13 @@ class Agente:
     def __init__(self, medir, base=None, parametros=None, costos=None, eleccion_rl=None):
         """``medir(configuración) -> Evaluacion``: el evaluador (Dijkstra + simulador); la
         Evaluacion debe traer ``nops_por_pe`` en cada operación. ``base``: el dict de cgra.json.
-        ``eleccion_rl(actual, libres, pesos, camino) -> PE``: el agente RL; ``None`` si no hay."""
+        ``eleccion_rl(actual, libres, pesos, camino, opciones, c_actual) -> PE``: el agente RL (``None``
+        si no hay); ``opciones`` = ``{PE libre: {"C": C efectivo del camino con ese PE, "cumple_tipos"}}``,
+        ``c_actual`` = el C efectivo del camino actual y ``contexto`` = ``{"episodio", "historial" (los
+        últimos episodios), "mejor", "C_malla"}`` con el C real de los episodios anteriores
+        (``eleccion_rl(actual, libres, pesos, camino, opciones, c_actual, contexto)``). En el punto de
+        paro se llama con ``parada=max_extension`` y debe devolver ``n``: 0 para parar o de 1 a
+        ``max_extension`` para seguir ``n`` PEs más (``None`` si la respuesta no sirve: para)."""
         self.medir = medir
         self.base = base if base is not None else leer_cgra()
         self.parametros = parametros or Parametros()
@@ -87,9 +126,26 @@ class Agente:
         self.evaluacion = None  # la evaluación de la malla (una sola simulación)
         self.pesos = {}  # PE -> PesoPE
         self.camino = []  # PEs del camino, en orden
-        # por paso: "inicio", "explotacion" (Dijkstra greedy), "rl" (agente RL), "rl_invalida"
-        # (el agente RL no devolvió un vecino libre: se usa Dijkstra greedy) o "exploracion" (sin RL)
+        # por paso: "inicio", "explotacion" (greedy: menor C), "rl" (agente RL), "rl_invalida"
+        # (el agente RL no devolvió un vecino libre: se usa greedy) o "exploracion" (sin RL)
         self.decisiones = []
+        # por qué terminó el camino: "sin_mejora" (cumple los tipos y ningún vecino baja C) o
+        # "sin_vecinos" (el PE actual no tiene vecinos sin visitar)
+        self.parada = None
+        # decisiones en los puntos de paro: {"paso", "pes", "decision" (rl, rl_invalida o exploracion),
+        # "n" (0 = parar; n > 0 = seguir n PEs más)}
+        self.extensiones = []
+        self.evaluacion_episodio = None  # la simulación del rectángulo del camino (evaluar_episodio)
+        self.episodio = None  # resumen del episodio: malla, estado, C real, recompensa
+        self.semilla_actual = self.parametros.semilla  # la semilla del episodio en curso
+        self.n_episodio = 0  # número del episodio en curso (0, 1, ...)
+        self.historial = []  # episodios ya evaluados, en orden (correr)
+        self.mejor = None  # el episodio correcto de menor C real
+        self.c_best = None  # C_best: el mejor C real hasta ahora (al principio, el de la malla completa)
+        self.motivo_fin = None  # por qué terminó correr: "max_episodios" o "paciencia"
+        self.cache_episodios = {}  # clave de la configuración -> Evaluacion (rectángulos ya simulados)
+        self._vistos = set()  # claves de los rectángulos que ya salieron en esta corrida (correr)
+        self.al_simular = None  # al_simular(configuracion, evaluacion): tras cada simulación nueva
 
     # -- la malla ---------------------------------------------------------------------
     def de_distribucion(self, filas, columnas):
@@ -144,15 +200,30 @@ class Agente:
                 resultado.append(ids.id_de(fila + df, columna + dc))
         return resultado
 
-    def caminar(self, pesos, filas, columnas):
-        """Desde ``inicio``, epsilon-greedy entre los vecinos sin visitar, hasta que el PE actual no
-        tiene vecinos sin visitar. En cada paso, con probabilidad ``epsilon`` decide el agente RL
-        (o, sin agente RL, uno de los libres al azar), y si no, Dijkstra greedy (el de menor peso;
-        en empate, el primero fila por fila). Deja en ``self.decisiones`` qué se hizo en cada paso."""
+    def costo_efectivo(self, camino):
+        """``(C efectivo, C valuado)`` de un conjunto de PEs. El valuado es ``valuar_camino``; el
+        efectivo es ese mismo C si los PEs cumplen los tipos de PE (``cumple_tipos``) y ``P_fallo``
+        si no, como en el contrato (una configuración que no es válida cuesta P_fallo)."""
+        c = self.valuar_camino(camino)["C"]
+        valido = self.cumple_tipos({self.pesos[pe].tipo for pe in camino})
+        return (c if valido else self.costos.p_fallo), c
+
+    def caminar(self, filas, columnas, semilla=None):
+        """Desde ``inicio``, epsilon-greedy entre los vecinos sin visitar. En cada paso, con
+        probabilidad ``epsilon`` decide el agente RL (o, sin agente RL, uno de los libres al azar), y
+        si no, greedy: el vecino que deja el menor C efectivo (``costo_efectivo``; en empate, el de
+        menor C valuado y luego el primero fila por fila). En el punto de paro (el camino cumple los
+        tipos de PE y ningún vecino libre baja su C), con probabilidad ``epsilon`` el agente RL (o el
+        azar) decide parar o seguir ``n`` PEs más (``decidir_extension``; queda en
+        ``self.extensiones``); si no, para (``self.parada = "sin_mejora"``). También termina cuando el
+        PE actual no tiene vecinos sin visitar (``"sin_vecinos"``). Deja en ``self.decisiones`` qué se hizo en
+        cada paso. ``semilla``: la del azar (por defecto la de los parámetros). Necesita ``self.pesos``
+        y ``self.evaluacion`` (los pone ``buscar``)."""
         epsilon = self.parametros.epsilon
         if not 0 <= epsilon <= 1:
             raise ValueError(f"epsilon = {epsilon} debe estar entre 0 y 1")
-        azar = random.Random(self.parametros.semilla)
+        self.semilla_actual = self.parametros.semilla if semilla is None else semilla
+        azar = random.Random(self.semilla_actual)
         f0, c0 = self.parametros.inicio
         if not (0 <= f0 < filas and 0 <= c0 < columnas):
             raise ValueError(f"inicio ({f0}, {c0}) fuera de la malla {filas}x{columnas}")
@@ -161,39 +232,250 @@ class Agente:
         actual = ids.id_de(f0, c0)
         camino, visitados = [actual], {actual}
         self.decisiones = ["inicio"]
+        self.parada = None
+        self.extensiones = []
+        extra = 0  # pasos que faltan de una extensión (sin revisar el paro)
         while True:
             libres = [v for v in self.vecinos(actual, filas, columnas) if v not in visitados]
             if not libres:
+                self.parada = "sin_vecinos"
                 return camino
+            c_actual = self.costo_efectivo(camino)[0]
+            costos = {v: self.costo_efectivo(camino + [v]) for v in libres}
+            greedy = min(libres, key=lambda v: (costos[v], orden[v]))
+            if extra == 0 and self.cumple_tipos({self.pesos[pe].tipo for pe in camino}) \
+                    and costos[greedy][0] >= c_actual:
+                # punto de paro: ya cumple los tipos y ningún vecino baja C (según el estimado)
+                if azar.random() < epsilon:
+                    extra = self.decidir_extension(actual, libres, camino, costos, c_actual, azar, orden)
+                if extra == 0:
+                    self.parada = "sin_mejora"
+                    return camino
             if azar.random() < epsilon:
                 if self.eleccion_rl is None:
                     actual = azar.choice(sorted(libres, key=orden.get))
                     self.decisiones.append("exploracion")
                 else:
-                    propuesta = self.eleccion_rl(actual, sorted(libres, key=orden.get), self.pesos, camino)
+                    opciones = self._opciones_rl(libres, camino, costos)
+                    propuesta = self.eleccion_rl(actual, sorted(libres, key=orden.get), self.pesos, camino,
+                                                 opciones, c_actual, self.contexto_rl())
                     if propuesta in libres:
                         actual = propuesta
                         self.decisiones.append("rl")
                     else:
-                        actual = min(libres, key=lambda v: (self.pesos[v].peso, orden[v]))
+                        actual = greedy
                         self.decisiones.append("rl_invalida")
             else:
-                actual = min(libres, key=lambda v: (pesos[v].peso, orden[v]))
+                actual = greedy
                 self.decisiones.append("explotacion")
             camino.append(actual)
             visitados.add(actual)
+            if extra > 0:
+                extra -= 1
 
-    def buscar(self, evaluacion=None):
-        """Simula la malla (o usa ``evaluacion`` si ya se tiene), calcula los pesos y recorre el camino.
-        Devuelve la lista de PEs del camino."""
+    def _opciones_rl(self, libres, camino, costos):
+        return {v: {"C": costos[v][0], "cumple_tipos": self.cumple_tipos({self.pesos[pe].tipo for pe in camino + [v]})}
+                for v in libres}
+
+    def decidir_extension(self, actual, libres, camino, costos, c_actual, azar, orden):
+        """En el punto de paro: cuántos PEs más sigue el camino (0 = parar). Lo decide el agente RL
+        (con el historial y el rectángulo actual en el contexto) o, sin él, el azar (de 0 a
+        ``max_extension``). Una respuesta inválida del agente RL es parar. Queda en ``self.extensiones``."""
+        maximo = self.parametros.max_extension
+        if maximo < 1:
+            return 0
+        if self.eleccion_rl is None:
+            n, decision = azar.randint(0, maximo), "exploracion"
+        else:
+            contexto = dict(self.contexto_rl(), rectangulo=[" ".join(f) for f in self.malla_episodio(camino)])
+            respuesta = self.eleccion_rl(actual, sorted(libres, key=orden.get), self.pesos, camino,
+                                         self._opciones_rl(libres, camino, costos), c_actual, contexto,
+                                         parada=maximo)
+            valida = isinstance(respuesta, int) and not isinstance(respuesta, bool) and 0 <= respuesta <= maximo
+            n, decision = (respuesta, "rl") if valida else (0, "rl_invalida")
+        self.extensiones.append({"paso": len(camino) - 1, "pes": len(camino), "decision": decision, "n": n})
+        return n
+
+    def contexto_rl(self):
+        """Lo que el agente RL recibe de los episodios anteriores: los últimos ``historial_llm``, el
+        mejor y el C de la malla completa (la referencia). El C de cada episodio es el real."""
+        n = self.parametros.historial_llm
+        return {"episodio": self.n_episodio, "historial": self.historial[-n:] if n else [],
+                "mejor": self.mejor, "C_malla": self.evaluacion.costo if self.evaluacion else None}
+
+    def preparar(self, evaluacion=None):
+        """Simula la malla de referencia (o usa ``evaluacion`` si ya se tiene) y calcula los pesos."""
         malla = self.malla()
         self.evaluacion = evaluacion if evaluacion is not None else self.medir(self.configuracion(malla))
         if not self.evaluacion.valida:
             raise ValueError(f"la malla {len(malla)}x{len(malla[0])} no es correcta "
                              f"({self.evaluacion.estado}): {self.evaluacion.motivo}")
         self.pesos = self.calcular_pesos(self.evaluacion, malla)
-        self.camino = self.caminar(self.pesos, len(malla), len(malla[0]))
+        return malla
+
+    def buscar(self, evaluacion=None, semilla=None):
+        """Simula la malla (o usa ``evaluacion`` si ya se tiene), calcula los pesos y recorre el camino
+        con ``semilla`` (por defecto la de los parámetros). Devuelve la lista de PEs del camino."""
+        malla = self.preparar(evaluacion)
+        self.camino = self.caminar(len(malla), len(malla[0]), semilla)
         return self.camino
+
+    def descender(self, evaluacion=None, semilla=None):
+        """Modo ``bloques``: un episodio de descenso por bloques desde la malla de referencia
+        (``dijkstra/bloques.py``). Devuelve el episodio."""
+        from .bloques import descender
+        self.preparar(evaluacion)
+        self.semilla_actual = self.parametros.semilla if semilla is None else semilla
+        self.camino, self.decisiones, self.parada, self.extensiones = [], [], None, []
+        self.episodio = descender(self, random.Random(self.semilla_actual))
+        self.decisiones, self.parada = list(self.episodio["decisiones"]), self.episodio["parada"]
+        return self.episodio
+
+    # -- episodio: el rectángulo del camino, simulado --------------------------------------
+    def letra_memoria(self):
+        """La letra del tipo de PE de memoria del esquema (la de los bordes oeste y este)."""
+        letras = [letra for letra, t in self.base["tipos_pe"].items()
+                  if {i.upper() for i in t["instrucciones"]} & MEMORIA_OPS
+                  and not {i.upper() for i in t["instrucciones"]} & COMPUTO_OPS]
+        if len(letras) != 1:
+            raise ValueError(f"se esperaba un solo tipo de PE de memoria en tipos_pe, hay {letras}")
+        return letras[0]
+
+    def malla_episodio(self, camino=None):
+        """La malla simulable del camino: el rectángulo de filas y columnas que ocupa en la malla,
+        sin las columnas que en ese rectángulo son solo de memoria, con una columna de memoria al
+        oeste y otra al este (la regla de bordes de costos.json). Los PEs del rectángulo que no están
+        en el camino quedan con su tipo de la malla."""
+        camino = self.camino if camino is None else camino
+        if not camino:
+            raise ValueError("no hay camino para formar el episodio")
+        malla = self.malla()
+        m = self.letra_memoria()
+        posiciones = [Malla.posicion(pe) for pe in camino]
+        f0, f1 = min(f for f, _ in posiciones), max(f for f, _ in posiciones)
+        c0, c1 = min(c for _, c in posiciones), max(c for _, c in posiciones)
+        interiores = [c for c in range(c0, c1 + 1) if any(malla[f][c] != m for f in range(f0, f1 + 1))]
+        return tuple((m,) + tuple(malla[f][c] for c in interiores) + (m,) for f in range(f0, f1 + 1))
+
+    @staticmethod
+    def _clave(configuracion):
+        return json.dumps(configuracion, sort_keys=True)
+
+    def simular_episodio(self, configuracion):
+        """``(Evaluacion, repetido)`` del rectángulo. Si esa configuración ya está en
+        ``cache_episodios`` (de esta corrida o de una anterior, con --continuar) no se vuelve a simular;
+        si no, se simula con ``medir`` y se guarda. ``repetido`` dice si el rectángulo ya había salido
+        en esta corrida."""
+        clave = self._clave(configuracion)
+        repetido = clave in self._vistos
+        self._vistos.add(clave)
+        if clave in self.cache_episodios:
+            return self.cache_episodios[clave], repetido
+        e = self.medir(configuracion)
+        if e.estado not in NO_ATRIBUIBLES:  # un fallo de infraestructura se puede reintentar
+            self.cache_episodios[clave] = e
+        if self.al_simular:
+            self.al_simular(configuracion, e)
+        return e, repetido
+
+    def evaluar_episodio(self, evaluacion=None, repetido=False):
+        """Simula la malla del episodio (``malla_episodio``) con ``simular_episodio`` (o usa
+        ``evaluacion`` si ya se tiene) y calcula la recompensa del episodio ``R = C_best_prev − C``,
+        con ``C_best_prev`` = ``self.c_best`` (el mejor C real hasta ahora; si no hay, el de la malla
+        completa); ``−P_fallo`` si no es correcta. Devuelve ``self.episodio``."""
+        if self.evaluacion is None or not self.camino:
+            raise ValueError("primero hay que recorrer el camino (buscar)")
+        malla = self.malla_episodio()
+        if evaluacion is None:
+            evaluacion, repetido = self.simular_episodio(self.configuracion(malla))
+        e = evaluacion
+        self.evaluacion_episodio = e
+        mejor_previo = self.c_best if self.c_best is not None else self.evaluacion.costo
+        m = e.metricas or {}
+        self.episodio = {
+            "n": self.n_episodio,
+            "semilla": self.semilla_actual,
+            "camino": list(self.camino),
+            "decisiones": list(self.decisiones),
+            "parada": self.parada,
+            "extensiones": list(self.extensiones),
+            "extension": sum(x["n"] for x in self.extensiones),
+            "repetido": repetido,
+            "malla": [" ".join(fila) for fila in malla],
+            "filas": len(malla),
+            "columnas": len(malla[0]),
+            "pes": len(malla) * len(malla[0]),
+            "estado": e.estado,
+            "motivo": e.motivo,
+            "C": e.costo,
+            "C_A": m.get("C_A"),
+            "C_A_norm": m.get("C_A_norm"),
+            "C_L_norm": m.get("C_L_norm"),
+            "C_R": m.get("C_R"),
+            "costo_por_operacion": {op: o.costo for op, o in e.operaciones.items()},
+            "C_estimado": self.valuar_camino()["C"],
+            "C_best_prev": mejor_previo,
+            "recompensa": recompensa(e.estado, e.costo, mejor_previo, self.costos.p_fallo),
+            "formula": "R = C_best_prev − C (correcta); −P_fallo (penalizada); C_best_prev = el mejor C real "
+                       "de los episodios anteriores (al principio, el de la malla completa). C es el de la "
+                       "simulación del rectángulo del camino; C_estimado, el de la valuación sin volver a "
+                       "simular que usa el greedy en cada paso",
+        }
+        return self.episodio
+
+    def correr(self, evaluacion=None, al_episodio=None):
+        """El ciclo de episodios (retroalimentación agente ↔ evaluador). Cada episodio recorre un camino
+        con la semilla ``semilla + n``, simula su rectángulo y calcula su C real y su recompensa. Si el C
+        real es menor que el mejor (más allá de ``tolerancia_empate``), ese episodio pasa a ser el mejor;
+        si no, se descarta y cuenta para la paciencia (un fallo de infraestructura no cuenta). Termina
+        con ``max_episodios`` o al llegar a ``paciencia`` episodios seguidos sin mejora. Al final, el
+        camino del agente (``camino``, ``decisiones``, ``episodio``...) es el del mejor episodio (o el del
+        último, si ninguno fue correcto). ``al_episodio(episodio)`` se llama tras cada episodio.
+        Devuelve el historial."""
+        if self.parametros.max_episodios < 1 or self.parametros.paciencia < 1:
+            raise ValueError("max_episodios y paciencia deben ser al menos 1")
+        if self.parametros.modo not in ("camino", "bloques"):
+            raise ValueError(f"modo = {self.parametros.modo!r}: use 'camino' o 'bloques'")
+        self.historial, self.mejor, self.motivo_fin = [], None, None
+        self.c_best, self._vistos = None, set()
+        sin_mejora = 0
+        for n in range(self.parametros.max_episodios):
+            self.n_episodio = n
+            inicio_episodio = time.monotonic()
+            if self.parametros.modo == "bloques":
+                if self.c_best is None:
+                    self.preparar(evaluacion)
+                    self.c_best = self.evaluacion.costo  # C_best,0: la malla completa (punto de partida)
+                ep = self.descender(self.evaluacion, semilla=self.parametros.semilla + n)
+            else:
+                self.buscar(evaluacion if n == 0 else self.evaluacion, semilla=self.parametros.semilla + n)
+                if self.c_best is None:
+                    self.c_best = self.evaluacion.costo  # C_best,0: la malla completa (punto de partida)
+                ep = self.evaluar_episodio()
+            mejora = (ep["estado"] == CORRECTA and ep["C"] is not None
+                      and ep["C"] < self.c_best - self.costos.tolerancia_empate)
+            ep["mejora"] = mejora
+            ep["duracion_s"] = round(time.monotonic() - inicio_episodio, 2)
+            if mejora:
+                self.c_best, self.mejor = ep["C"], ep
+                sin_mejora = 0
+            elif ep["estado"] not in NO_ATRIBUIBLES:
+                sin_mejora += 1
+            ep["C_best"] = self.c_best
+            self.historial.append(ep)
+            if al_episodio:
+                al_episodio(ep)
+            if sin_mejora >= self.parametros.paciencia:
+                self.motivo_fin = "paciencia"
+                break
+        else:
+            self.motivo_fin = "max_episodios"
+        elegido = self.mejor or self.historial[-1]
+        self.camino, self.decisiones = list(elegido["camino"]), list(elegido["decisiones"])
+        self.parada, self.semilla_actual, self.n_episodio = elegido["parada"], elegido["semilla"], elegido["n"]
+        self.extensiones = list(elegido["extensiones"])
+        self.episodio = elegido
+        return self.historial
 
     # -- valuación del camino -----------------------------------------------------------
     def valuar_camino(self, camino=None):
@@ -254,20 +536,26 @@ class Agente:
         eligió y la valuación del prefijo (los PEs del camino hasta ese paso) con ``valuar_camino``,
         sin volver a simular. ``cumple_tipos`` dice si el prefijo cumple las reglas de tipos de PE;
         ``mejor`` es el paso de menor C entre los que las cumplen (solo informativo: el resultado
-        sigue siendo el camino completo)."""
+        sigue siendo el camino completo). ``C_efectivo`` es el C que usa el greedy (``P_fallo`` si el
+        prefijo no cumple los tipos) y ``recompensa`` = C_efectivo del paso anterior − C_efectivo de
+        este paso (positiva si el paso bajó el costo; ``None`` en el inicio)."""
         malla = self.malla()
         pasos, tipos = [], set()
+        anterior = None
         for i, (pe, decision) in enumerate(zip(self.camino, self.decisiones)):
             p = self.pesos[pe]
             tipos.add(p.tipo)
             v = self.valuar_camino(self.camino[:i + 1])
+            efectivo = self.costo_efectivo(self.camino[:i + 1])[0]
             pasos.append({
                 "paso": i, "pe": pe, "fila": Malla.posicion(pe)[0], "columna": Malla.posicion(pe)[1],
                 "tipo": p.tipo, "peso": p.peso, "decision": decision, "pes": i + 1,
                 "C": v["C"], "C_A": v["C_A"], "C_A_norm": v["C_A_norm"], "C_L_norm": v["C_L_norm"],
                 "C_R": v["C_R"], "costo_por_operacion": {op: o["costo"] for op, o in v["por_operacion"].items()},
                 "cumple_tipos": self.cumple_tipos(tipos),
+                "C_efectivo": efectivo, "recompensa": None if anterior is None else anterior - efectivo,
             })
+            anterior = efectivo
         validos = [p for p in pasos if p["cumple_tipos"]]
         mejor = min(validos, key=lambda p: (p["C"], p["paso"])) if validos else None
         return {
@@ -276,19 +564,34 @@ class Agente:
             "columnas": len(malla[0]),
             "C_malla": self.evaluacion.costo,
             "epsilon": self.parametros.epsilon,
-            "semilla": self.parametros.semilla,
+            "semilla": self.semilla_actual,
+            "parada": self.parada,
+            "extensiones": self.extensiones,
             "mejor": None if mejor is None else {k: mejor[k] for k in ("paso", "pe", "pes", "C", "C_A", "C_L_norm")},
             "pasos": pasos,
             "nota": "Cada paso valúa el prefijo del camino con los ciclos, NOPs y C_R de la simulación de la "
                     "malla completa (sin volver a simular). cumple_tipos: reglas de tipos de PE de costos.json "
-                    "(memoria y cómputo, E y V); no las de bordes. decision: inicio, explotacion (Dijkstra "
-                    "greedy), rl (agente RL), rl_invalida (respuesta inválida, se usó Dijkstra greedy) o "
-                    "exploracion (sin agente RL, al azar).",
+                    "(memoria y cómputo, E y V); no las de bordes. C_efectivo: C si cumple los tipos, si no "
+                    "P_fallo. recompensa: C_efectivo anterior − C_efectivo (positiva si bajó el costo). "
+                    "decision: inicio, explotacion (greedy: el vecino de menor C efectivo), rl (agente RL), "
+                    "rl_invalida (respuesta inválida, se usó greedy) o exploracion (sin agente RL, al azar). "
+                    "parada: sin_mejora (cumple los tipos y ningún vecino baja C) o sin_vecinos.",
         }
 
     # -- resultado --------------------------------------------------------------------
     def resultado(self):
-        """Los PEs del camino con su tipo y peso, y el mapa de la malla con '.' en los que quedan fuera."""
+        """Los PEs del camino con su tipo y peso, y el mapa de la malla con '.' en los que quedan fuera.
+        En el modo ``bloques``: la malla final del episodio elegido y su descenso."""
+        if self.parametros.modo == "bloques":
+            ep = self.episodio or {}
+            return {
+                "modo": "bloques", "malla": ep.get("malla"), "filas": ep.get("filas"),
+                "columnas": ep.get("columnas"), "pes": ep.get("pes"), "C": ep.get("C"),
+                "epsilon": self.parametros.epsilon, "semilla": self.semilla_actual,
+                "bloques": list(self.parametros.bloques), "parada": self.parada,
+                "exploraciones": self.decisiones.count("exploracion"), "rl": self.decisiones.count("rl"),
+                "rl_invalidas": self.decisiones.count("rl_invalida"), "episodio": self.episodio,
+            }
         malla = self.malla()
         ids = Malla(len(malla), len(malla[0]))
         en_camino = set(self.camino)
@@ -304,10 +607,13 @@ class Agente:
             "peso_total": sum(self.pesos[pe].peso for pe in self.camino),
             "valuacion": self.valuar_camino(),
             "epsilon": self.parametros.epsilon,
-            "semilla": self.parametros.semilla,
+            "semilla": self.semilla_actual,
             "exploraciones": self.decisiones.count("exploracion"),
             "rl": self.decisiones.count("rl"),
             "rl_invalidas": self.decisiones.count("rl_invalida"),
+            "parada": self.parada,
+            "extensiones": self.extensiones,
+            "episodio": self.episodio,
             "camino": [{"paso": i, "decision": d, **asdict(self.pesos[pe])}
                        for i, (pe, d) in enumerate(zip(self.camino, self.decisiones))],
             "mapa": mapa,

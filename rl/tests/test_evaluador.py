@@ -34,8 +34,8 @@ class TestEntradas(unittest.TestCase):
         self.assertEqual(parametros_instancia(FUENTE_OPERACIONES, "reduccion"), {"TAMANO_VECTOR": 100})
         esperado = calcular_esperado(self.t.instancia["memoria_inicial"], "reduccion")
         self.assertEqual(esperado["result"]["forma"], [1, 1])
-        # a[i] = b[i] = i % 4 + 1  ->  c = 2·(1+2+3+4)·25 = 500
-        self.assertEqual(esperado["result"]["valores"], [500.0])
+        # producto punto: a[i] = b[i] = i % 4 + 1  ->  c[i] = (i % 4 + 1)², result = (1+4+9+16)·25 = 750
+        self.assertEqual(esperado["result"]["valores"], [750.0])
         self.assertEqual(len(esperado["c"]["valores"]), 100)
 
     def test_esperado_matmul_y_convolucion(self):
@@ -308,7 +308,7 @@ class TestEvaluador(unittest.TestCase):
         """Una división entre cero aborta el simulador: fallo_simulador sin métricas inventadas."""
         def mutar(d, i):
             ruta = d / "pe_instructions" / "PE01.txt"
-            instruccion(ruta, buscar(ruta, "ADD rC, rA, rB"), "DIV rC, rA, rT")
+            instruccion(ruta, buscar(ruta, "MUL rC, rA, rB"), "DIV rC, rA, rT")
             instruccion(ruta, buscar(ruta, "NOP"), "MOV rT, 0.0")
         r = self._evaluar(self.t.config(("E", "E", "E")), CompiladorMutado(mutar), "div0")
         self.assertEqual(r["estado_evaluacion"], estados.FALLO_SIMULADOR, r["errores"])

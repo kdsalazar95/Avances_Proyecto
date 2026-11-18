@@ -13,7 +13,7 @@ mesh can still lack the required memory, arithmetic or routes.
 
 1. Classify every computation loop nest as one of:
    - **map loop:** independent elementwise iterations, such as
-     `c[i] = a[i] + b[i]` in `reduccion`.
+     `c[i] = a[i] * b[i]` in `reduccion` (a dot product).
    - **reduction loop:** loop-carried accumulation over the whole problem, such
      as `result += c[i]` in `reduccion`.
    - **map with a nested reduction:** independent output elements, each with its

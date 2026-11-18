@@ -80,7 +80,7 @@ def _matriz(valores, filas, columnas):
 
 def esperado_reduccion(regiones, formas):
     a, b = regiones["a"], regiones["b"]
-    c = [x + y for x, y in zip(a, b)]
+    c = [x * y for x, y in zip(a, b)]  # producto punto: c[i] = a[i]·b[i], result = Σ c
     return {"c": c, "result": [sum(c)]}
 
 

@@ -106,7 +106,7 @@ PASOS_ESCALAR = [
     ("SEND east, rA", "RECV west, rA"),
     ("LD rB, b[{i}]", "NOP"),
     ("SEND east, rB", "RECV west, rB"),
-    ("NOP", "ADD rC, rA, rB"),
+    ("NOP", "MUL rC, rA, rB"),
     ("RECV east, rC", "SEND west, rC"),
     ("ST c[{i}], rC", "ADD acc, acc, rC"),
 ]
@@ -115,7 +115,7 @@ PASOS_VECTOR = [
     ("VSEND east, v0", "VRECV west, v0"),
     ("VLD v1, b[{i}]", "NOP"),
     ("VSEND east, v1", "VRECV west, v1"),
-    ("NOP", "VADD v2, v0, v1"),
+    ("NOP", "VMUL v2, v0, v1"),
     ("VRECV east, v2", "VSEND west, v2"),
     ("VST c[{i}], v2", "VADD v7, v7, v2"),
 ]

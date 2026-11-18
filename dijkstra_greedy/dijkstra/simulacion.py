@@ -34,6 +34,57 @@ PATRON_TOTAL = re.compile(r"^Total de ciclos:\s+(\d+)", re.M)
 PATRON_FILA_PE = re.compile(r"^\s+(PE\d+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+[\d.]+%\s*$", re.M)
 
 
+PATRON_CICLOS = {
+    "ciclos_computo": re.compile(r"^Ciclos de cómputo:\s+(\d+)", re.M),
+    "ciclos_comunicacion": re.compile(r"^Ciclos de comunicación:\s+(\d+)", re.M),
+    "ciclos_inactivos": re.compile(r"^Ciclos inactivos:\s+(\d+)", re.M),
+}
+PATRON_INSTRUCCION = re.compile(r"\b([A-Z][A-Z0-9]*) x(\d+)")
+PATRON_LECTURAS = re.compile(r"\((\d+) lecturas?\)")
+PATRON_ESCRITURAS = re.compile(r"\((\d+) escrituras?\)")
+PATRON_PASO = re.compile(r"^\s+Ciclo\s+\d+:", re.M)
+
+
+def _seccion(texto, titulo):
+    """El texto desde la línea que empieza con ``titulo`` hasta la siguiente línea en blanco."""
+    i = texto.find(titulo)
+    if i < 0:
+        return ""
+    fin = texto.find("\n\n", i)
+    return texto[i:fin if fin >= 0 else len(texto)]
+
+
+def leer_detalle(texto):
+    """Todo lo que el reporte de ciclos dice de la corrida, además del total de ciclos y los NOPs:
+    ciclos de cómputo, comunicación e inactivos; instrucciones por categoría (memoria, cálculo,
+    comunicación, otras) y por instrucción (ADD, VLD, SEND...); lecturas y escrituras de memoria y
+    transferencias entre PEs. Los datos que el reporte no trae quedan en ``None``."""
+    detalle = {}
+    for clave, patron in PATRON_CICLOS.items():
+        encontrado = patron.search(texto)
+        detalle[clave] = int(encontrado.group(1)) if encontrado else None
+    filas = PATRON_FILA_PE.findall(texto)
+    if filas:
+        for i, clave in enumerate(("memoria", "calculo", "comunicacion", "otras"), start=2):
+            detalle[f"instrucciones_{clave}"] = sum(int(f[i]) for f in filas)
+        detalle["instrucciones"] = sum(detalle[f"instrucciones_{c}"]
+                                       for c in ("memoria", "calculo", "comunicacion", "otras"))
+        detalle["nops"] = sum(int(f[6]) for f in filas)
+        detalle["pes_por_tipo"] = {}
+        for f in filas:
+            detalle["pes_por_tipo"][f[1]] = detalle["pes_por_tipo"].get(f[1], 0) + 1
+    por_instruccion = {}
+    for nombre, n in PATRON_INSTRUCCION.findall(_seccion(texto, "Instrucciones que ejecuta cada PE")):
+        por_instruccion[nombre] = por_instruccion.get(nombre, 0) + int(n)
+    detalle["por_instruccion"] = dict(sorted(por_instruccion.items())) or None
+    accesos = _seccion(texto, "Accesos a memoria")
+    detalle["lecturas"] = sum(int(n) for n in PATRON_LECTURAS.findall(accesos)) if accesos else None
+    detalle["escrituras"] = sum(int(n) for n in PATRON_ESCRITURAS.findall(accesos)) if accesos else None
+    pasos = texto[texto.find("Pasos de comunicación"):] if "Pasos de comunicación" in texto else ""
+    detalle["transferencias"] = len(PATRON_PASO.findall(pasos)) if pasos else None
+    return detalle
+
+
 def leer_reporte(texto):
     """``(ciclos, nops, nops_por_pe)`` del reporte de ciclos; ``None`` si no aparece."""
     total = PATRON_TOTAL.search(texto)
@@ -81,14 +132,15 @@ def leer_corrida(carpeta, ruta_memoria_inicial):
     if not reporte.is_file() or not memoria.is_file():
         raise ValueError(f"{carpeta}: falta {ARCHIVO_REPORTE} o {ARCHIVO_MEMORIA} (¿se corrió con --write-back?)")
     configuracion = json.loads((carpeta / ARCHIVO_CGRA).read_text(encoding="utf-8"))
-    ciclos, nops, nops_por_pe = leer_reporte(reporte.read_text(encoding="utf-8"))
+    texto = reporte.read_text(encoding="utf-8")
+    ciclos, nops, nops_por_pe = leer_reporte(texto)
     if ciclos is None or nops is None:
         raise ValueError(f"{reporte}: no tiene 'Total de ciclos' o la tabla de instrucciones por PE")
     n_pes = len(configuracion["malla"]) * len(configuracion["malla"][0].split())
     inicial, _ = ImagenMemoria.leer(ruta_memoria_inicial).regiones()
     final, _ = ImagenMemoria.leer(memoria).regiones()
     return dict(configuracion=configuracion, ciclos={"total": ciclos}, nops=nops, slots=ciclos * n_pes,
-                nops_por_pe=nops_por_pe, inicial=inicial, final=final)
+                nops_por_pe=nops_por_pe, inicial=inicial, final=final, detalle=leer_detalle(texto))
 
 
 def ejecutar(formato, dir_pe, ruta_memoria, carpeta, t_max_s):

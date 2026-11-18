@@ -26,6 +26,7 @@ al registrar la evaluación (``agente_greedy.py``).
 
 import json
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -76,6 +77,11 @@ class EvaluacionOperacion:
     C_L_norm: float = None
     costo: float = None
     nops_por_pe: dict = None  # PE -> NOPs, de la tabla "Instrucciones por PE" de reporte_ciclos.txt
+    detalle: dict = None  # todo lo demás del reporte de ciclos (simulacion.leer_detalle)
+    mapeo: dict = None  # métricas del mapeo de Dijkstra (operaciones, ciclos, instrucciones, transferencias, nops)
+    tiempo_mapeo_s: float = None  # Dijkstra (placement y enrutamiento)
+    tiempo_validacion_s: float = None  # PE*.txt y validación E03
+    tiempo_simulacion_s: float = None  # simulador
 
     @property
     def valido(self):
@@ -147,7 +153,7 @@ def medir_reporte(operacion, datos, grafo, regiones, costos, ruta_memoria=None):
     return EvaluacionOperacion(
         operacion, estado, "; ".join(e["detalle"] for e in errores), datos.get("modo"), ciclos, nops, slots,
         fraccion_nops(ciclos, nops, n_pes), costos.latencia(ciclos, nops, n_pes), v["C_R"], validacion, errores,
-        nops_por_pe=datos.get("nops_por_pe"))
+        nops_por_pe=datos.get("nops_por_pe"), detalle=datos.get("detalle"))
 
 
 def agregar(formato, operaciones, costos, normalizadores, motivo=""):
@@ -355,8 +361,22 @@ class Evaluador:
         return self.mediciones[clave]
 
     def _medir(self, operacion, formato):
+        """``_medir_etapas`` con el tiempo de cada etapa y las métricas del mapeo en la evaluación."""
+        tiempos = {}
+        e = self._medir_etapas(operacion, formato, tiempos)
+        e.tiempo_mapeo_s = tiempos.get("mapeo")
+        e.tiempo_validacion_s = tiempos.get("validacion")
+        e.tiempo_simulacion_s = tiempos.get("simulacion")
+        e.mapeo = tiempos.get("metricas_mapeo")
+        return e
+
+    def _medir_etapas(self, operacion, formato, tiempos):
         grafo = self.grafos[operacion]
+        t0 = time.monotonic()
         resultado = evaluar_configuracion(grafo, formato, self.compatibilidad, self.opciones, self.modo)
+        tiempos["mapeo"] = round(time.monotonic() - t0, 3)
+        if resultado.valido:
+            tiempos["metricas_mapeo"] = dict(resultado.metricas)
         if not resultado.valido:
             error = {"skill": "Dijkstra", "regla": "sin_mapeo", "detalle": resultado.motivo}
             return EvaluacionOperacion(operacion, FALLO_EVALUADOR, resultado.motivo, errores=[error])
@@ -366,13 +386,17 @@ class Evaluador:
             error = {"skill": "E01", "regla": "infraestructura", "detalle": f"no existe {ruta_memoria}"}
             return EvaluacionOperacion(operacion, ERROR_INFRAESTRUCTURA, error["detalle"], modo, errores=[error])
         with tempfile.TemporaryDirectory() as directorio:
+            t0 = time.monotonic()
             dir_pe = escribir_pe(resultado, MallaMapeo.desde_formato(formato), Path(directorio) / CARPETA_PE)
             e03 = validar_programas(formato, dir_pe, ruta_memoria, self.salidas[operacion])
+            tiempos["validacion"] = round(time.monotonic() - t0, 3)
             if not e03["valida"]:
                 estado = ERROR_INFRAESTRUCTURA if e03.get("fallo_infraestructura") else FALLO_EVALUADOR
                 return EvaluacionOperacion(operacion, estado, "; ".join(e["detalle"] for e in e03["errores"][:5]),
                                            modo, errores=e03["errores"])
+            t0 = time.monotonic()
             datos, error = simular(formato, dir_pe, ruta_memoria, directorio, self.costos.t_max_simulacion_s)
+            tiempos["simulacion"] = round(time.monotonic() - t0, 3)
         if error is not None:
             return EvaluacionOperacion(operacion, FALLO_SIMULADOR, error["detalle"], modo, errores=[error])
         datos["modo"] = modo

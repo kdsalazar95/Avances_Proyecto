@@ -18,7 +18,7 @@
 #include "memoria_cgra.h"
 
 // ---------------------------------------------------------------------------
-// Reduccion: c[i] = a[i] + b[i] y result = suma de c.
+// Reduccion (producto punto): c[i] = a[i] * b[i] y result = suma de c.
 // ---------------------------------------------------------------------------
 
 #define TAMANO_VECTOR 100
@@ -50,7 +50,7 @@ static void reduccion(void) {
     inicializar_reduccion(a, b, c, &result);
 
     for (int i = 0; i < TAMANO_VECTOR; ++i) {
-        c[i] = a[i] + b[i];
+        c[i] = a[i] * b[i];
     }
 
     for (int i = 0; i < TAMANO_VECTOR; ++i) {

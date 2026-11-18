@@ -39,3 +39,21 @@ graphs/
 # Ciclo RL: la configuración de corridas se sube; las corridas generadas no.
 !rl/config/*.json
 resultados/corridas/
+
+# Todo lo que no es código: resultados de corridas (en cualquier nivel),
+# logs, imágenes, animaciones, documentos generados y tablas de datos.
+resultados/
+*.log
+*.png
+*.gif
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+*.csv
+*.jsonl
+*.pkl
+*.npy
+*.npz
+*.aux
+*.synctex.gz
