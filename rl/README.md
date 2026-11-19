@@ -63,13 +63,23 @@ uv run python -m unittest discover -s rl/tests -t .
   es `C = K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R`: dividir entre `C_A_ref` y `C_L_ref` pone el área y la
   latencia en la misma escala. Si cada sistema usara los suyos, un mismo C significaría cosas distintas. La
   referencia se evalúa con ellos (no mide los propios).
-- **Los mismos pesos, K, tolerancias, P_fallo, paciencia (3) y tope de iteraciones (10).**
-- **Epsilon:** con probabilidad `epsilon` la acción es una configuración al azar (filas, columnas y tipo E/V de
-  cada PE del interior al azar, dentro de las restricciones) y si no, la del LLM. `epsilon = 0` es el LLM puro y
-  `epsilon = 1`, búsqueda al azar. No hay Greedy.
+- **Los mismos pesos, K, tolerancias, P_fallo y tiempo máximo de simulación (36000 s).**
+- **Por episodios, como el Sistema 2** (`agente/episodios.py`): cada episodio empieza en la referencia; cada
+  propuesta se evalúa y pasa a ser la mejor del episodio si baja su costo; el episodio termina tras 3 propuestas
+  seguidas sin mejorar, si el LLM responde PARAR o a los 40 pasos. La corrida termina con `max_episodios` o con
+  `paciencia` episodios seguidos sin bajar el mejor costo. El LLM ve el episodio actual y la mejor configuración
+  de cada episodio anterior.
+- **Epsilon (exploración, la del Sistema 2):** con probabilidad `epsilon` la acción es un paso al azar desde la
+  mejor configuración del episodio: quitar un bloque de 16, 8, 4, 2 o 1 filas o columnas del interior (del inicio o
+  del final) o cambiar un PE del interior E <-> V. Si no, decide el LLM. `epsilon = 0` es el LLM puro y
+  `epsilon = 1`, pasos al azar. No hay Greedy.
+- **Caché, como el Sistema 2:** una configuración ya evaluada no se vuelve a evaluar (la clave es el hardware, no
+  el texto del cgra.json). Repetida en la corrida, su evaluación cuesta 0 s; si viene de otra corrida del barrido,
+  cuenta lo que tardó cuando se evaluó.
 
 ```sh
-# Una corrida por epsilon (la referencia 32x32 se evalúa una vez y las demás la reusan) y la comparación
+# Una corrida por epsilon con paciencia 10 y tope de 30 episodios (la referencia 32x32 se evalúa una vez y las
+# demás la reusan; las corridas comparten la caché). Paciencia 3 y 6 salen de cortar esas mismas corridas.
 uv run python -m rl barrido --config rl/config/comparacion.json --epsilons 0 10 20 80 90 100
 
 uv run python -m rl convergencia --corrida resultados/corridas/s1-comparacion-eps000   # rehace los datos de una corrida
@@ -82,18 +92,24 @@ Datos que deja (`rl/herramientas/convergencia.py`; el Sistema 2 escribe el mismo
 |---|---|
 | `<corrida>/convergencia.csv` | Una fila por evaluación (n = 0 la referencia): quién la propuso (`llm`, `exploracion`), estado, tamaño, C, C_A, C_A_norm, C_L_norm, C_R, `C_best` hasta ahí, si mejoró, tiempo de decisión, de evaluación y acumulado |
 | `<corrida>/convergencia.json` | Resumen: epsilon, motivo de fin, evaluaciones, C_ref, C_best, mejora relativa, **convergencia** (evaluación y tiempo en que se alcanzó el mejor C) e **hitos** del 50, 90 y 100 % de la mejora |
-| `<id>-comparacion/comparacion_epsilon.csv` | Una fila por epsilon con ese resumen: la tabla para comparar tiempos de convergencia |
-| `<id>-comparacion/curvas_epsilon.csv` | C y C_best de cada evaluación de cada epsilon (formato largo): las curvas de cómo baja la función de costo |
+| `<corrida>/episodios.json` | Los episodios: pasos, mejor configuración y su C, si bajó el mejor de la corrida y por qué terminó |
+| `<id>-comparacion/comparacion_epsilon.csv` | Una fila por epsilon y paciencia (6 x 3 = 18) con ese resumen: la tabla para comparar tiempos de convergencia |
+| `<id>-comparacion/curvas_epsilon.csv` | C y C_best de cada evaluación de cada epsilon y paciencia (formato largo): las curvas de cómo baja la función de costo |
+
+**Paciencia sin correr de más.** La paciencia solo decide cuándo se deja de intentar: con la misma semilla, una
+corrida con paciencia 3 hace los mismos primeros episodios que una con paciencia 10 (el LLM solo ve lo que ya
+pasó) y se detiene antes. `convergencia.corte` corta cada corrida donde se habrían detenido las de paciencia 3 y 6
+(una prueba compara el corte con una corrida real de menor paciencia).
 
 El tiempo acumulado cuenta la decisión (el LLM o el azar) y la evaluación (Skills + simulador) desde la
-primera iteración; la referencia es n = 0, tiempo 0.
+primera propuesta; la referencia es n = 0, tiempo 0.
 
 ## Estructura
 
 ```
 rl/
 ├── entorno/      reglas del problema: contexto (A01) y validación de la acción (A03)
-├── agente/       lo que propone y aprende: política, recepción, historial, óptimas y ciclo (A02, A04–A08)
+├── agente/       lo que propone y aprende: política, recepción, historial, óptimas, ciclo y episodios (A02, A04–A08)
 ├── evaluador/    E01–E08: Skills 01–09 (o el sustituto) + simulador, métricas, recompensa y reporte
 ├── herramientas/ convergencia y barrido de epsilon (comparación), referencia, informe, recálculo, GIF del log, codex.sh
 ├── config/       comparacion.json + normalizacion.json (la comparación) y corrida_*.json

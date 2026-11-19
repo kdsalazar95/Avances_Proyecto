@@ -6,6 +6,7 @@
     ├── instancia/          memoria.bin, esperado.json (privado del evaluador), instancia.json
     ├── normalizacion.json  C_A,ref y C_L,ref: los fijos de corrida.json ("normalizadores") o los
     │                       medidos en la referencia
+    ├── episodios.json      con "max_episodios" en los límites: los episodios terminados (agente/episodios.py)
     ├── convergencia.csv/.json  costo y tiempo de cada evaluación y el resumen de convergencia
     ├── candidatas/<id>/    acciones del agente: cgra.json + candidata.json (solo lectura)
     ├── eval/<id>/          evaluación aislada: skills/intento-k/ (Skills 01–09), PE*.txt,
@@ -19,6 +20,8 @@ El agente y el evaluador se llaman por sus interfaces; el ciclo solo usa el
 reporte E08 que devuelve ``evaluar``.
 """
 
+import copy
+import json
 import shutil
 import stat
 import time
@@ -36,6 +39,7 @@ from ..evaluador.compilador import crear_compilador
 from ..evaluador.conjunto import evaluar_conjunto
 from ..evaluador.evaluacion import accion_de, evaluar
 from ..evaluador.recompensa import costo_reportado, recompensa, verificar_penalizacion
+from .episodios import CacheEvaluaciones, clave_hardware, estado_episodio
 from .memoria import Memoria
 from .optimas import actualizar_optimas
 from .politica import PoliticaManual
@@ -136,6 +140,8 @@ class Ciclo:
         self.normalizadores = leer_json(ruta_norm) if ruta_norm.is_file() else None
         self.compilador = crear_compilador(self.corrida["compilador"])
         self.estado_corrida = None
+        cache = self.corrida.get("cache_evaluaciones")
+        self.cache = CacheEvaluaciones(resolver(cache)) if cache else None
 
     # --- referencia -------------------------------------------------------
     def evaluar_referencia(self):
@@ -149,6 +155,7 @@ class Ciclo:
             self.normalizadores = reporte["parametros"]["normalizadores"]
             escribir_json(self.carpeta / "normalizacion.json", self.normalizadores)
         reporte["decidio"] = ID_REFERENCIA
+        self._guardar_en_cache(directorio, reporte)
         self._registrar(reporte, directorio, iteracion=0)
         return reporte
 
@@ -174,6 +181,7 @@ class Ciclo:
         reporte = {k: v for k, v in previa.items()
                    if k not in ("iteracion", "marca_tiempo", "duplicada_de", "malla", "recibido_A04")}
         reporte["reusada_de"] = relativa(origen)
+        reporte["clave_hardware"] = clave_hardware(directorio)
         self._registrar(reporte, directorio, iteracion=0)
         return reporte
 
@@ -199,23 +207,33 @@ class Ciclo:
         _solo_lectura(destino)
         return destino
 
-    def evaluar_candidata(self, origen, id_candidata=None, justificacion=None, decidio="llm", tiempo_decision_s=None):
+    def evaluar_candidata(self, origen, id_candidata=None, justificacion=None, decidio="llm", tiempo_decision_s=None,
+                          mejor_anterior=None, episodio=None):
         """A03 → evaluador (E01–E08) → A04 → A05 → A07 para un cgra.json ya escrito por el agente.
 
         ``decidio``: quién propuso la configuración (``llm`` o ``exploracion``, la rama al azar de epsilon);
-        ``tiempo_decision_s``: lo que tardó en proponerla (para los tiempos de convergencia)."""
+        ``tiempo_decision_s``: lo que tardó en proponerla (para los tiempos de convergencia).
+        ``mejor_anterior``: el costo contra el que se mide la recompensa (por defecto, el mejor de la corrida; en
+        un episodio, el mejor del episodio). ``episodio``: ``{"n", "paso"}``. Una configuración ya evaluada (en
+        esta corrida o en la caché compartida) no se vuelve a evaluar (``_de_cache``)."""
         if self.normalizadores is None:
             raise ErrorCiclo("no hay referencia correcta evaluada: no se puede optimizar")
         id_candidata = id_candidata or self.siguiente_id()
         if self.memoria.por_id(id_candidata):
             raise ErrorCiclo(f"'{id_candidata}' ya fue evaluada")
         directorio = self.registrar_candidata(origen, id_candidata)
-        mejor_anterior = self.memoria.mejor_costo()
-        reporte = self._evaluar(directorio, id_candidata, self.normalizadores, mejor_anterior)
+        if mejor_anterior is None:
+            mejor_anterior = self.memoria.mejor_costo()
+        reporte = self._de_cache(directorio, id_candidata, mejor_anterior)
+        if reporte is None:
+            reporte = self._evaluar(directorio, id_candidata, self.normalizadores, mejor_anterior)
+            self._guardar_en_cache(directorio, reporte)
         if justificacion:
             reporte["justificacion_agente"] = justificacion
         reporte["decidio"] = decidio
         reporte["tiempo_decision_s"] = tiempo_decision_s
+        if episodio is not None:
+            reporte["episodio"] = episodio
         return self._registrar(reporte, directorio, iteracion=self.memoria.siguiente_iteracion())
 
     def evaluar_lote(self, origenes, justificaciones=None, paralelo=4):
@@ -247,6 +265,49 @@ class Ciclo:
             reporte["decidio"] = "llm"
             registrados.append(self._registrar(reporte, directorios[k], iteracion=primera + k))
         return registrados
+
+    # --- caché de evaluaciones ---------------------------------------------
+    QUITAR_DE_CACHE = ("iteracion", "marca_tiempo", "duplicada_de", "malla", "recibido_A04", "_hubo_mejora",
+                       "justificacion_agente", "decidio", "tiempo_decision_s", "episodio", "reusada_de", "repetida",
+                       "es_referencia")
+
+    def _guardar_en_cache(self, directorio, reporte):
+        """Anota la clave de hardware en el reporte y lo guarda en la caché compartida (si la hay)."""
+        if reporte["estado_evaluacion"] == estados.ACCION_INVALIDA:
+            return
+        try:
+            reporte["clave_hardware"] = clave_hardware(directorio)
+        except (OSError, ValueError):
+            return
+        if self.cache is not None:
+            limpio = {k: v for k, v in reporte.items() if k not in self.QUITAR_DE_CACHE}
+            self.cache.guardar(reporte["clave_hardware"], limpio, self.corrida["id"])
+
+    def _de_cache(self, directorio, id_candidata, mejor_anterior):
+        """El reporte de una configuración ya evaluada (misma clave de hardware), con el id y la recompensa de esta
+        acción, o None. ``repetida``: ya salió en esta corrida (no costó tiempo); si no, viene de la caché compartida
+        y conserva el tiempo que tardó cuando se evaluó."""
+        if not validar_accion(directorio, self.contexto, id_candidata)["paquete_valido"]:
+            return None
+        clave = clave_hardware(directorio)
+        previa = next((e for e in self.memoria.entradas if e.get("clave_hardware") == clave
+                       and e["estado_evaluacion"] not in estados.NO_ATRIBUIBLES), None)
+        base = previa if previa is not None else (self.cache.buscar(clave) if self.cache else None)
+        if base is None:
+            return None
+        reporte = copy.deepcopy({k: v for k, v in base.items() if k not in self.QUITAR_DE_CACHE})
+        reporte["id_evaluacion"] = id_candidata
+        reporte["accion"] = accion_de(id_candidata, directorio)
+        p_fallo = self.corrida["penalizacion"]["P_fallo"]
+        reporte["recompensa"], reporte["detalle_recompensa"] = recompensa(reporte["estado_evaluacion"],
+                                                                         reporte["costo_total"], mejor_anterior,
+                                                                         p_fallo)
+        reporte["es_referencia"] = False
+        reporte["clave_hardware"] = clave
+        reporte["repetida"] = previa is not None
+        reporte["reusada_de"] = previa["id_evaluacion"] if previa is not None else "cache"
+        escribir_json(self.carpeta / "eval" / id_candidata / "reporte.json", reporte)
+        return reporte
 
     def _evaluar(self, directorio, id_candidata, normalizadores, mejor_anterior, es_referencia=None):
         validacion = validar_accion(directorio, self.contexto, id_candidata)
@@ -297,7 +358,10 @@ class Ciclo:
 
     # --- ciclo completo ---------------------------------------------------
     def correr(self, politica, max_iteraciones=None):
-        """Repite proponer → validar → evaluar → registrar hasta un criterio de fin."""
+        """Repite proponer → validar → evaluar → registrar hasta un criterio de fin. Con ``max_episodios`` en los
+        límites, por episodios (``correr_episodios``); si no, por iteraciones."""
+        if self.corrida["limites"].get("max_episodios"):
+            return self.correr_episodios(politica)
         limites = self.corrida["limites"]
         max_iteraciones = max_iteraciones or limites["max_iteraciones"]
         inicio = time.monotonic()
@@ -328,6 +392,124 @@ class Ciclo:
             reporte = self.evaluar_candidata(dir_salida, id_candidata, propuesta.get("justificacion"),
                                              propuesta.get("decidio", "llm"), t_decision)
             politica.incorporar(recibir_reporte(reporte, id_candidata, dir_salida))
+        self.escribir_resumen(self.estado_corrida)
+        from ..herramientas.convergencia import escribir as escribir_convergencia
+        escribir_convergencia(self.carpeta)
+        return self.estado_corrida
+
+    # --- episodios ---------------------------------------------------------
+    def episodios(self):
+        ruta = self.carpeta / "episodios.json"
+        return leer_json(ruta)["episodios"] if ruta.is_file() else []
+
+    def _escribir_episodios(self, episodios, motivo_fin=None):
+        limites = self.corrida["limites"]
+        referencia = self.memoria.por_id(ID_REFERENCIA)
+        mejores = [ep["C"] for ep in episodios if ep.get("C") is not None]
+        escribir_json(self.carpeta / "episodios.json", {
+            "max_episodios": limites["max_episodios"], "paciencia": limites["paciencia"],
+            "sin_mejora_episodio": limites.get("sin_mejora_episodio", 3),
+            "max_pasos_episodio": limites.get("max_pasos_episodio", 40),
+            "epsilon": self.corrida.get("epsilon", 0.0), "semilla": self.corrida.get("semilla", 0),
+            "C_ref": referencia["costo_total"] if referencia else None,
+            "C_best": min(mejores) if mejores else None, "motivo_fin": motivo_fin, "episodios": episodios,
+        })
+
+    def _entrada_episodio(self, n, entradas_ep, estado, anteriores):
+        """La entrada de la política en un episodio: la de ``Memoria.entrada_politica`` (en el primer paso, sin E: el
+        episodio empieza en la referencia) más el episodio (su mejor, cuántas acciones no la mejoraron y los
+        episodios anteriores con su mejor configuración)."""
+        entrada = self.memoria.entrada_politica() or {}
+        if not entradas_ep:
+            entrada = {**entrada, "E": None}
+        mejor = estado["mejor"]
+        entrada["episodio"] = {
+            "n": n, "paso": estado["pasos"],
+            "mejor": {**Memoria._costos(mejor), "malla": mejor.get("malla")},
+            "sin_mejora": estado["sin_mejora"],
+            "limite_sin_mejora": self.corrida["limites"].get("sin_mejora_episodio", 3),
+            "anteriores": [{"n": ep["n"], "malla": ep["malla"], "C": ep["C"], "mejora": ep["mejora"]}
+                           for ep in anteriores],
+        }
+        return entrada
+
+    def correr_episodios(self, politica):
+        """El ciclo por episodios (``agente/episodios.py``), con la regla de paciencia del Sistema 2. Se puede
+        reanudar: los episodios terminados están en ``episodios.json`` y el que estaba en curso se reconstruye con
+        sus evaluaciones del historial."""
+        limites = self.corrida["limites"]
+        tolerancia = self.corrida["tolerancia_empate_costo"]
+        sin_mejora_max = limites.get("sin_mejora_episodio", 3)
+        max_pasos = limites.get("max_pasos_episodio", 40)
+        referencia = self.memoria.por_id(ID_REFERENCIA)
+        if referencia is None or referencia["estado_evaluacion"] != estados.CORRECTA:
+            raise ErrorCiclo("no hay referencia correcta evaluada: no se puede optimizar")
+        inicio = time.monotonic()
+        while True:
+            episodios = self.episodios()
+            c_best, sin_mejora = referencia["costo_total"], 0
+            for ep in episodios:
+                if ep["mejora"]:
+                    c_best, sin_mejora = ep["C"], 0
+                elif ep["estado"] not in estados.NO_ATRIBUIBLES:
+                    sin_mejora += 1
+            if len(episodios) >= limites["max_episodios"]:
+                self.estado_corrida = "terminada: max_episodios"
+                break
+            if sin_mejora >= limites["paciencia"]:
+                self.estado_corrida = "terminada: paciencia"
+                break
+            if limites.get("t_max_total_s") and time.monotonic() - inicio >= limites["t_max_total_s"]:
+                self.estado_corrida = "terminada: t_max_total"
+                break
+            n = len(episodios)
+            motivo, pausa = None, False
+            while motivo is None:
+                entradas_ep = [e for e in self.memoria.entradas if (e.get("episodio") or {}).get("n") == n]
+                estado = estado_episodio(entradas_ep, referencia, tolerancia)
+                if estado["sin_mejora"] >= sin_mejora_max:
+                    motivo = "sin_mejora"
+                    break
+                if estado["pasos"] >= max_pasos:
+                    motivo = "tope"
+                    break
+                id_candidata = self.siguiente_id()
+                self._apartar_interrumpidos(id_candidata)
+                dir_salida = self.carpeta / "candidatas" / id_candidata
+                t_decision = time.monotonic()
+                propuesta = politica.proponer(self.contexto, self._entrada_episodio(n, entradas_ep, estado, episodios),
+                                              id_candidata, dir_salida)
+                t_decision = round(time.monotonic() - t_decision, 3)
+                if propuesta is None:
+                    pausa = True
+                    break
+                if propuesta.get("parar"):
+                    dir_salida.rename(dir_salida.with_name(f"{id_candidata}.parar-{n}"))
+                    motivo = "parar"
+                    break
+                if not dir_salida.exists():
+                    dir_salida.mkdir(parents=True)
+                reporte = self.evaluar_candidata(dir_salida, id_candidata, propuesta.get("justificacion"),
+                                                 propuesta.get("decidio", "llm"), t_decision,
+                                                 mejor_anterior=estado["mejor"]["costo_total"],
+                                                 episodio={"n": n, "paso": estado["pasos"]})
+                politica.incorporar(recibir_reporte(reporte, id_candidata, dir_salida))
+            if pausa:
+                self.estado_corrida = "en_pausa: esperando acción del agente"
+                break
+            entradas_ep = [e for e in self.memoria.entradas if (e.get("episodio") or {}).get("n") == n]
+            mejor = estado_episodio(entradas_ep, referencia, tolerancia)["mejor"]
+            mejora = mejor["costo_total"] < c_best - tolerancia
+            atribuibles = [e for e in entradas_ep if e["estado_evaluacion"] not in estados.NO_ATRIBUIBLES]
+            episodios.append({
+                "n": n, "semilla": self.corrida.get("semilla", 0) + n, "pasos": len(entradas_ep),
+                "mejor": mejor["id_evaluacion"], "malla": mejor.get("malla"), "C": mejor["costo_total"],
+                "estado": estados.CORRECTA if atribuibles or not entradas_ep else estados.ERROR_INFRAESTRUCTURA,
+                "mejora": mejora, "C_best": min(c_best, mejor["costo_total"]), "fin": motivo,
+                "decisiones": [e.get("decidio") for e in entradas_ep],
+            })
+            self._escribir_episodios(episodios)
+        self._escribir_episodios(self.episodios(), self.estado_corrida)
         self.escribir_resumen(self.estado_corrida)
         from ..herramientas.convergencia import escribir as escribir_convergencia
         escribir_convergencia(self.carpeta)

@@ -24,9 +24,10 @@ Implementaciones:
   (``claude -p``, ``codex exec``...), con la plantilla de corrida.json.
 * ``PoliticaGuion``: entrega paquetes ya escritos, en orden (pruebas, demos).
 * ``PoliticaEpsilon``: envuelve a otra (el LLM) con epsilon para la comparación entre sistemas: con
-  probabilidad ``epsilon`` la acción es una configuración al azar dentro de las restricciones
-  (exploración) y si no, la del LLM. ``epsilon = 0`` es el LLM puro y ``epsilon = 1``, búsqueda al azar.
-  No hay Greedy: la rama que no explora es siempre el LLM.
+  probabilidad ``epsilon`` la acción es un paso al azar desde la mejor configuración del episodio (quitar un
+  bloque de filas o columnas, o cambiar un PE E <-> V: los movimientos del Sistema 2; ``episodios.py``) y si no,
+  la del LLM. ``epsilon = 0`` es el LLM puro y ``epsilon = 1``, pasos al azar. No hay Greedy: la rama que no
+  explora es siempre el LLM.
 """
 
 import json
@@ -35,7 +36,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ..comun import ARCHIVO_METADATOS, INSTRUCCIONES_AGENTE, RAIZ_REPO, escribir_json, leer_json, relativa
+from ..comun import ARCHIVO_CONFIG, ARCHIVO_METADATOS, INSTRUCCIONES_AGENTE, RAIZ_REPO, escribir_json, leer_json, relativa
 
 
 DESCRIPCION_LATENCIA = {
@@ -106,6 +107,24 @@ def construir_prompt(contexto, entrada, id_candidata, dir_salida):
         json.dumps(entrada["mejor_candidato"] if entrada else None, indent=1, ensure_ascii=False),
         "```",
         "",
+    ]
+    episodio = (entrada or {}).get("episodio")
+    if episodio:
+        lineas += [
+            "### Episodio",
+            f"La búsqueda va por episodios. Este es el episodio {episodio['n']} (paso {episodio['paso']}): empezó en "
+            "la configuración de referencia y tu acción se compara con la **mejor del episodio**; si baja su costo, "
+            "pasa a ser la mejor del episodio. El episodio termina cuando "
+            f"{episodio['limite_sin_mejora']} acciones seguidas no la mejoran o cuando respondes PARAR. Después "
+            "empieza otro episodio desde la referencia. `anteriores` son los episodios ya terminados, con la mejor "
+            "configuración de cada uno.",
+            "```json",
+            json.dumps({k: episodio[k] for k in ("n", "paso", "mejor", "sin_mejora", "limite_sin_mejora",
+                                                 "anteriores")}, indent=1, ensure_ascii=False),
+            "```",
+            "",
+        ]
+    lineas += [
         "## Qué entregar",
         f"Escribe en `{relativa(dir_salida)}/` (y en ningún otro lugar):",
         "- `cgra.json`: formato de `FormatoCGRA` con `filas` y `columnas` enteros, `palabras_memoria`, "
@@ -114,6 +133,15 @@ def construir_prompt(contexto, entrada, id_candidata, dir_salida):
         f"- `candidata.json`: {{\"id_candidata\": \"{id_candidata}\", \"justificacion\": \"una frase basada en "
         "el costo C, el estado E y el mejor candidato\"}",
         "",
+    ]
+    if episodio:
+        lineas += [
+            f"Para terminar el episodio (PARAR) sin proponer otra configuración, escribe solo `candidata.json` con "
+            f"{{\"id_candidata\": \"{id_candidata}\", \"parar\": true, \"justificacion\": \"...\"}} y ningún "
+            "cgra.json.",
+            "",
+        ]
+    lineas += [
         "Decide solo con la información de este prompt: no leas el historial, los reportes de evaluación ni otras "
         "candidatas. No escribas PE*.txt ni ejecutes el evaluador, y no edites historial, reportes, métricas ni "
         "recompensas. No se garantiza que la próxima acción mejore.",
@@ -129,7 +157,14 @@ def _propuesta(id_candidata, dir_salida):
             justificacion = leer_json(metadatos).get("justificacion")
         except (json.JSONDecodeError, AttributeError):
             justificacion = None
-    return {"id_candidata": id_candidata, "justificacion": justificacion, "directorio": str(dir_salida)}
+    parar = False
+    if metadatos.is_file() and not (Path(dir_salida) / ARCHIVO_CONFIG).is_file():
+        try:
+            parar = bool(leer_json(metadatos).get("parar"))
+        except (json.JSONDecodeError, AttributeError):
+            parar = False
+    return {"id_candidata": id_candidata, "justificacion": justificacion, "directorio": str(dir_salida),
+            "parar": parar}
 
 
 class Politica:
@@ -205,25 +240,18 @@ class PoliticaGuion(Politica):
         self.recibidos.append(recibido)
 
 
-MEMORIA_OPS = {"LD", "ST", "VLD", "VST"}  # las mismas de entorno/validacion_accion.py
-
-
-def configuracion_al_azar(azar, restricciones):
-    """Una malla al azar dentro de las restricciones: filas y columnas uniformes en su rango, columnas oeste y
-    este de memoria y cada PE del interior de un tipo de cómputo al azar (E o V). Devuelve la lista de filas."""
-    por_tipo = restricciones["instrucciones_por_tipo"]
-    memoria = sorted(t for t, ins in por_tipo.items() if set(ins) & MEMORIA_OPS)
-    computo = sorted(t for t, ins in por_tipo.items() if not set(ins) & MEMORIA_OPS)
-    if not memoria or not computo:
-        raise ValueError("el esquema necesita al menos un tipo de memoria y uno de cómputo")
-    filas = azar.randint(restricciones["filas"]["minimo"], restricciones["filas"]["maximo"])
-    columnas = azar.randint(max(3, restricciones["columnas"]["minimo"]), restricciones["columnas"]["maximo"])
-    m = memoria[0]
-    return [" ".join([m] + [azar.choice(computo) for _ in range(columnas - 2)] + [m]) for _ in range(filas)]
+def _malla_de_partida(entrada):
+    """La malla desde la que explora el paso al azar: la mejor del episodio (o el mejor candidato)."""
+    entrada = entrada or {}
+    for mejor in ((entrada.get("episodio") or {}).get("mejor"), entrada.get("mejor_candidato")):
+        if mejor and mejor.get("malla"):
+            return mejor["malla"]
+    raise ValueError("no hay una configuración de partida para el paso al azar")
 
 
 class PoliticaEpsilon(Politica):
-    """Epsilon sobre el LLM: con probabilidad ``epsilon``, una configuración al azar; si no, el LLM.
+    """Epsilon sobre el LLM: con probabilidad ``epsilon``, un paso al azar desde la mejor configuración del
+    episodio (``episodios.paso_al_azar``); si no, el LLM.
 
     El azar de cada iteración depende solo de ``semilla`` y del id (``it-0003``), así que una corrida
     reanudada toma las mismas decisiones. Cada propuesta lleva ``decidio``: ``llm`` o ``exploracion``.
@@ -242,10 +270,12 @@ class PoliticaEpsilon(Politica):
         azar = random.Random(f"{self.semilla}:{id_candidata}")
         if self.epsilon > 0 and azar.random() < self.epsilon:
             from ..herramientas.referencia import escribir_cgra
-            malla = configuracion_al_azar(azar, contexto["restricciones"])
-            texto = f"exploración al azar (epsilon = {self.epsilon}): malla {len(malla)}x{len(malla[0].split())}"
+            from .episodios import paso_al_azar
+            nombre, malla = paso_al_azar(azar, _malla_de_partida(entrada), contexto["restricciones"])
+            texto = (f"exploración al azar (epsilon = {self.epsilon}): {nombre} → malla "
+                     f"{len(malla)}x{len(malla[0].split())}")
             escribir_cgra(dir_salida, malla, esquema=self.esquema, justificacion=texto, id_candidata=id_candidata)
-            return {**_propuesta(id_candidata, dir_salida), "decidio": "exploracion"}
+            return {**_propuesta(id_candidata, dir_salida), "decidio": "exploracion", "movimiento": nombre}
         propuesta = self.base.proponer(contexto, entrada, id_candidata, dir_salida)
         return None if propuesta is None else {**propuesta, "decidio": "llm"}
 

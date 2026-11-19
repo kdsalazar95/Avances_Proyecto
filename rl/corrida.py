@@ -67,10 +67,17 @@ def validar_corrida(datos):
         errores.append("'penalizacion.P_fallo' debe ser un número > 0")
     if datos["tolerancia_empate_costo"] < 0:
         errores.append("'tolerancia_empate_costo' debe ser >= 0")
+    por_episodios = "max_episodios" in datos["limites"]
     for clave in LIMITES:
+        if clave == "max_iteraciones" and por_episodios:
+            continue  # por episodios, el tope es max_episodios
         valor = datos["limites"].get(clave)
         if not _numero(valor) or valor <= 0:
             errores.append(f"'limites.{clave}' debe ser un número > 0")
+    for clave in ("max_episodios", "sin_mejora_episodio", "max_pasos_episodio"):
+        valor = datos["limites"].get(clave)
+        if valor is not None and (not isinstance(valor, int) or isinstance(valor, bool) or valor < 1):
+            errores.append(f"'limites.{clave}' debe ser un entero >= 1")
     referencia = datos["referencia"]
     if "cgra" not in referencia and not isinstance(referencia.get("generar", {}).get("malla"), list):
         errores.append("'referencia' necesita 'cgra' (ruta a un cgra.json) o 'generar.malla' (lista de filas)")
@@ -87,6 +94,8 @@ def validar_corrida(datos):
         errores.append("'epsilon' debe ser un número entre 0 y 1 (probabilidad de explorar al azar)")
     if "semilla" in datos and (not isinstance(datos["semilla"], int) or isinstance(datos["semilla"], bool)):
         errores.append("'semilla' debe ser un entero")
+    if "cache_evaluaciones" in datos and not isinstance(datos["cache_evaluaciones"], str):
+        errores.append("'cache_evaluaciones' debe ser la ruta a la carpeta de la caché compartida")
     if "normalizadores" in datos and not isinstance(datos["normalizadores"], str):
         errores.append("'normalizadores' debe ser la ruta a un normalizacion.json con los normalizadores fijos")
     return errores

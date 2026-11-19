@@ -88,6 +88,10 @@ def main(argv=None):
     p.add_argument("--epsilons", nargs="+", required=True, help="0 a 1, o porcentajes: 0 10 20 80 90 100")
     p.add_argument("--corridas", default=str(CORRIDAS))
     p.add_argument("--max-iteraciones", type=int)
+    p.add_argument("--paciencia", type=int, default=10, help="Paciencia de cada corrida (la mayor del barrido)")
+    p.add_argument("--max-episodios", type=int, default=30, help="Tope de episodios de cada corrida")
+    p.add_argument("--paciencias", type=int, nargs="+", default=[3, 6, 10],
+                   help="Paciencias que se calculan cortando cada corrida (<= --paciencia)")
     sub.add_parser("convergencia").add_argument("--corrida", required=True)
     p = sub.add_parser("comparar", help="junta los datos de convergencia de varias corridas")
     p.add_argument("corridas_a_comparar", nargs="+", metavar="CORRIDA")
@@ -186,16 +190,20 @@ def main(argv=None):
 
             def avance(ciclo, estado):
                 c = json.loads((ciclo.carpeta / "convergencia.json").read_text(encoding="utf-8"))
-                print(f"{ciclo.corrida['id']}: {estado} · C_best = {c['C_best']} · convergió en la evaluación "
-                      f"{(c['convergencia'] or {}).get('evaluacion')}", flush=True)
+                print(f"{ciclo.corrida['id']}: {estado} · {c['episodios']} episodios · C_best = {c['C_best']} · "
+                      f"convergió en la evaluación {(c['convergencia'] or {}).get('evaluacion')}", flush=True)
 
             try:
                 epsilons = leer_epsilons(argumentos.epsilons)
             except ValueError as error:
                 print(f"Error: {error}", file=sys.stderr)
                 return 1
+            if max(argumentos.paciencias) > argumentos.paciencia:
+                print("Error: --paciencias no puede tener valores mayores que --paciencia", file=sys.stderr)
+                return 1
             _, resumenes = barrido(argumentos.config, epsilons, argumentos.corridas,
-                                   argumentos.max_iteraciones, al_terminar=avance)
+                                   argumentos.max_iteraciones, al_terminar=avance, paciencia=argumentos.paciencia,
+                                   max_episodios=argumentos.max_episodios, paciencias=argumentos.paciencias)
             print(f"Comparación: {len(resumenes)} corridas en {relativa(Path(argumentos.corridas))}/"
                   f"{resumenes[0]['corrida'].rsplit('-eps', 1)[0]}-comparacion/")
         elif argumentos.comando == "convergencia":

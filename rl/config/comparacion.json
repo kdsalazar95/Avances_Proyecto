@@ -1,6 +1,6 @@
 {
   "id": "s1-comparacion",
-  "descripcion": "Sistema 1 (agente LLM sin Greedy + evaluador con los Skills 01-09) para la comparación con el Sistema 2 (Greedy + Dijkstra). Mismas condiciones que el Sistema 2: la misma referencia 32x32 (la de cgra.json: fila 0 escalar E, fila 1 vectorial V, alternadas, con M en las columnas 0 y 31), los mismos normalizadores fijos (normalizacion.json), los mismos pesos, K, tolerancias y P_fallo, y la misma paciencia y tope de iteraciones. Cada cgra.json se evalúa con las tres operaciones. Con probabilidad epsilon la acción es una configuración al azar; si no, la propone el LLM.",
+  "descripcion": "Sistema 1 (agente LLM sin Greedy + evaluador con los Skills 01-09) para la comparación con el Sistema 2 (Greedy + Dijkstra). Mismas condiciones que el Sistema 2: la misma referencia 32x32 (la de cgra.json: fila 0 escalar E, fila 1 vectorial V, alternadas, con M en las columnas 0 y 31), los mismos normalizadores fijos (normalizacion.json), los mismos pesos, K, tolerancias y P_fallo, y la misma paciencia y tope de iteraciones. Cada cgra.json se evalúa con las tres operaciones. Va por episodios, como el Sistema 2. Con probabilidad epsilon la acción es un paso al azar desde la mejor configuración del episodio (los movimientos del Sistema 2); si no, la propone el LLM, que ve el episodio actual y los anteriores.",
   "operaciones": [
     "reduccion",
     "matmul",
@@ -46,9 +46,11 @@
   },
   "tolerancia_empate_costo": 1e-09,
   "limites": {
-    "max_iteraciones": 10,
+    "max_episodios": 10,
     "paciencia": 3,
-    "t_max_simulacion_s": 60,
+    "sin_mejora_episodio": 3,
+    "max_pasos_episodio": 40,
+    "t_max_simulacion_s": 36000,
     "t_max_total_s": null
   },
   "normalizadores": "rl/config/normalizacion.json",
@@ -123,8 +125,8 @@
   },
   "comentarios": {
     "normalizadores": "Los normalizadores fijos que usan los dos sistemas: C = K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R con los mismos C_A_ref y C_L_ref en los dos, para que un mismo C signifique lo mismo. La referencia 32x32 se evalúa con ellos (no mide los suyos).",
-    "limites": "max_iteraciones y paciencia: los mismos números del Sistema 2 (max_episodios 10, paciencia 3 en su agente.json).",
-    "epsilon": "Probabilidad de que la acción sea una configuración al azar (filas, columnas y tipo E/V de cada PE del interior al azar, dentro de las restricciones) en lugar de la del LLM. 0 = LLM puro; 1 = búsqueda al azar. El barrido (python -m rl barrido) lo cambia por corrida.",
+    "limites": "Por episodios, como el Sistema 2: max_episodios y paciencia (episodios seguidos sin bajar el mejor C) son los de su agente.json (10 y 3); el barrido usa paciencia 10 y tope 30 y saca paciencia 3 y 6 cortando cada corrida. Un episodio empieza en la referencia y termina tras sin_mejora_episodio (3) propuestas seguidas sin mejorar su mejor configuración, cuando el LLM responde PARAR o en max_pasos_episodio (40, el max_cambios_tipo del Sistema 2). t_max_simulacion_s: 36000 s (10 h), igual que el Sistema 2: la 32x32 necesita horas.",
+    "epsilon": "Probabilidad de que la acción sea un paso al azar desde la mejor configuración del episodio (quitar un bloque de 16, 8, 4, 2 o 1 filas o columnas del interior, o cambiar un PE E <-> V: los movimientos del Sistema 2) en lugar de la del LLM. 0 = LLM puro; 1 = pasos al azar. El barrido (python -m rl barrido) lo cambia por corrida.",
     "semilla": "Semilla del azar de epsilon: con la misma semilla, las mismas iteraciones exploran.",
     "compilador": "Skills 01-09 con Codex, en una sesión separada del agente (Claude)."
   }
