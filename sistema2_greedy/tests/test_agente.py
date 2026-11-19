@@ -107,13 +107,13 @@ class TestAgenteGreedy(unittest.TestCase):
             self.assertTrue(all(agente.costo_efectivo(camino + [v])[0] >= c for v in libres))
 
     def test_5_empates_y_paro_sin_mejora(self):
-        """Sin NOPs: PE00 (M) y sus vecinos PE01 (E) y PE10 (M) no cumplen los tipos (los dos cuestan
-        P_fallo); desempata el C valuado, más bajo con E. Luego PE11 (V) cumple los tipos. Desde ahí
-        cualquier PE solo suma área, C sube, y el camino termina (sin_mejora)."""
+        """Sin NOPs: PE00 (M) solo no cumple los tipos; con su vecino PE01 (E) ya hay memoria y cómputo
+        (no hace falta un V), mientras que con PE10 (M) no: va a PE01. Desde ahí cualquier PE solo suma
+        área, C sube, y el camino termina (sin_mejora)."""
         agente = Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 0)}), BASE,
                         parametros())
         camino = agente.buscar()
-        self.assertEqual(camino, ["PE00", "PE01", "PE11"])
+        self.assertEqual(camino, ["PE00", "PE01"])
         self.assertEqual(agente.parada, "sin_mejora")
         self.assertEqual(camino, Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops_iguales(MALLA_3X3, 0)}),
                                         BASE, parametros()).buscar())
@@ -228,7 +228,7 @@ class TestAgenteGreedy(unittest.TestCase):
             self.assertAlmostEqual(p["C"], agente.valuar_camino(camino[:i + 1])["C"])
             self.assertEqual((p["fila"], p["columna"]), Malla.posicion(p["pe"]))
             tipos = {agente.pesos[pe].tipo for pe in camino[:i + 1]}
-            self.assertEqual(p["cumple_tipos"], {"M", "E", "V"} <= tipos)
+            self.assertEqual(p["cumple_tipos"], "M" in tipos and bool(tipos & {"E", "V"}))  # memoria y cómputo
         self.assertAlmostEqual(h["pasos"][-1]["C"], agente.valuar_camino()["C"])
         validos = [p for p in h["pasos"] if p["cumple_tipos"]]
         self.assertEqual(h["mejor"]["C"], min(p["C"] for p in validos))
@@ -265,10 +265,11 @@ class TestAgenteGreedy(unittest.TestCase):
         NOPs del camino en C_L más de lo que suma de área), el camino sigue; para cuando todo vecino
         sube C. La recompensa de cada paso es C_efectivo anterior − C_efectivo."""
         nops = nops_iguales(MALLA_3X3, 0)
-        nops.update(PE00=10, PE01=10, PE11=10)
+        nops.update(PE00=10, PE01=10)
         agente = Agente(lambda c: evaluacion_falsa(MALLA_3X3, {"op": nops}, ciclos=10), BASE, parametros())
         camino = agente.buscar()
-        # Tras [PE00, PE01, PE11] (cumple tipos): PE21 (E, sin NOPs) baja C; PE10 y PE12 (M) lo suben.
+        # [PE00, PE01] ya cumple los tipos; PE11 (V) y luego PE21 (E), sin NOPs, diluyen los NOPs y bajan C;
+        # PE10 y PE12 (M) lo suben.
         self.assertEqual(camino, ["PE00", "PE01", "PE11", "PE21"])
         self.assertEqual(agente.parada, "sin_mejora")
         h = agente.historia()
@@ -278,15 +279,17 @@ class TestAgenteGreedy(unittest.TestCase):
         self.assertIsNone(h["pasos"][0]["recompensa"])
         for i in range(1, len(camino)):
             self.assertAlmostEqual(h["pasos"][i]["recompensa"], efectivos[i - 1] - efectivos[i])
-        self.assertEqual(efectivos[:2], [agente.costos.p_fallo] * 2)  # sin V no cumple los tipos
-        self.assertGreater(h["pasos"][3]["recompensa"], 0)  # PE21 bajó el costo
+        self.assertEqual(efectivos[0], agente.costos.p_fallo)  # solo memoria: no cumple los tipos
+        self.assertLess(efectivos[1], agente.costos.p_fallo)  # M + E ya cumple (no hace falta un V)
+        self.assertGreater(h["pasos"][2]["recompensa"], 0)  # PE11 bajó el costo
+        self.assertGreater(h["pasos"][3]["recompensa"], 0)  # PE21 también
         self.assertEqual(agente.resultado()["parada"], "sin_mejora")
 
     def test_15_paro_sin_vecinos(self):
         """Si se acaban los vecinos antes de cumplir los tipos o mientras C baja, para por sin_vecinos."""
-        malla = (("M", "E", "V"),)
+        malla = (("M", "M", "E"),)
         agente = Agente(lambda c: evaluacion_falsa(malla, {"op": nops_iguales(malla, 0)}), BASE,
-                        parametros(malla=["M E V"]))
+                        parametros(malla=["M M E"]))
         self.assertEqual(agente.buscar(), ["PE00", "PE01", "PE02"])
         self.assertEqual(agente.parada, "sin_vecinos")
 
@@ -328,13 +331,13 @@ class TestEpisodio(unittest.TestCase):
 
         agente = self.agente(medir)
         camino = agente.buscar()
-        self.assertEqual(camino, ["PE00", "PE01", "PE11"])
+        self.assertEqual(camino, ["PE00", "PE01"])
         ep = agente.evaluar_episodio()
         self.assertEqual(len(llamadas), 2)
-        self.assertEqual(llamadas[1]["malla"], ["M E M", "M V M"])
-        self.assertEqual((llamadas[1]["filas"], llamadas[1]["columnas"]), (2, 3))
+        self.assertEqual(llamadas[1]["malla"], ["M E M"])
+        self.assertEqual((llamadas[1]["filas"], llamadas[1]["columnas"]), (1, 3))
         self.assertEqual(llamadas[1]["tipos_pe"], BASE["tipos_pe"])
-        self.assertEqual(ep["malla"], ["M E M", "M V M"])
+        self.assertEqual(ep["malla"], ["M E M"])
         self.assertEqual(ep["estado"], "correcta")
         self.assertEqual(ep["C"], 1.25)
         self.assertEqual(ep["C_best_prev"], 5.0)
@@ -599,10 +602,11 @@ class TestModoBloques(unittest.TestCase):
     def medidor(self):
         """C = área/76 + 30/PEs: quitar PEs baja el área pero sube la latencia."""
         referencia = self.referencia()
-        llamadas = []
+        llamadas, mallas = [], []
 
         def medir(conf):
             llamadas.append(f"{conf['filas']}x{conf['columnas']}")
+            mallas.append(tuple(conf["malla"]))
             m = tuple(tuple(f.split()) for f in conf["malla"])
             base = referencia if len(llamadas) == 1 else m
             e = evaluacion_falsa(base, {"op": nops_iguales(base, 1)})
@@ -610,7 +614,7 @@ class TestModoBloques(unittest.TestCase):
             e.metricas = {"C_A": area, "C_A_norm": area / 76, "C_L_norm": 30 / pes, "C_R": 0.0}
             e.costo = area / 76 + 30 / pes
             return e
-        medir.llamadas = llamadas
+        medir.llamadas, medir.mallas = llamadas, mallas
         return medir
 
     def agente(self, **cambios):
@@ -629,7 +633,7 @@ class TestModoBloques(unittest.TestCase):
         self.assertEqual(d.malla(e)[0], ("M",) + ("E",) * 8 + ("M",))
         self.assertEqual(d.descripcion(d.aplicar(e0, "COLUMNAS FIN", 4)), "8x6")
         self.assertIsNone(d.aplicar(e0, "FILAS FIN", 8))  # no quedan filas
-        self.assertFalse(d.valido(Estado(0, 1, 0, 8)))  # una sola fila E: sin PE vectorial
+        self.assertTrue(d.valido(Estado(0, 1, 0, 8)))  # una sola fila E: válida (no se exige un V)
         self.assertTrue(d.valido(Estado(0, 2, 0, 1)))  # 2x3: M E M / M V M
         for fila in d.malla(Estado(2, 5, 3, 6)):
             self.assertEqual((fila[0], fila[-1]), ("M", "M"))
@@ -653,8 +657,9 @@ class TestModoBloques(unittest.TestCase):
         self.assertEqual((ep["filas"], ep["columnas"]), (aceptadas[-1]["filas"], aceptadas[-1]["columnas"]))
         claves = {a._clave(a.configuracion(tuple(tuple(f.split()) for f in ep["malla"])))}
         self.assertTrue(claves <= set(a.cache_episodios))
-        # las acciones que darían la misma malla no se prueban dos veces
-        self.assertEqual(len(a.medir.llamadas), len(set(a.medir.llamadas)))
+        # las acciones que darían la misma malla no se prueban dos veces (dos mallas pueden tener el mismo
+        # tamaño, p. ej. una fila E o una fila V: se compara la malla, no el tamaño)
+        self.assertEqual(len(a.medir.mallas), len(set(a.medir.mallas)))
         self.assertEqual(a.resultado()["modo"], "bloques")
         json.dumps(a.historial, allow_nan=False)
 
@@ -714,7 +719,7 @@ class TestModoBloques(unittest.TestCase):
     def test_7_fase_tipos(self):
         """Con tipos: true, después del descenso se cambian PEs del interior E <-> V (los bordes M no se
         tocan); cada malla se simula y se acepta si su C real baja. Con C = área/76 + 30/PEs, pasar de V
-        a E baja el área: la fase deja un solo V (hace falta al menos un escalar y un vectorial)."""
+        a E baja el área: la fase quita todos los V (no se exige tener un escalar y un vectorial a la vez)."""
         sin = self.agente(max_episodios=1)
         sin.correr()
         a = self.agente(max_episodios=1, tipos=True)
@@ -728,7 +733,7 @@ class TestModoBloques(unittest.TestCase):
         final = [f.split() for f in ep["malla"]]
         self.assertEqual((len(final), len(final[0])), (sin.historial[0]["filas"], sin.historial[0]["columnas"]))
         self.assertTrue(all(f[0] == "M" and f[-1] == "M" for f in final))
-        self.assertEqual(sum(f[1:-1].count("V") for f in final), 1)
+        self.assertEqual(sum(f[1:-1].count("V") for f in final), 0)
         for t in tipos:
             self.assertNotIn(t["pe"][1], (0, len(final[0]) - 1))  # nunca una columna de memoria
             self.assertEqual({t["de"], t["a"]}, {"E", "V"})
@@ -754,7 +759,7 @@ class TestModoBloques(unittest.TestCase):
         malla = gif_camino.MallaPEs(datos["malla_referencia"])
         ultimo = [c for c in cuadros if c["tipo"] == "aceptada"][-1]
         activos = malla.activos(ultimo["rect"], ultimo["malla"])
-        self.assertEqual(sum(x == "V" for x in activos.values()), 1)
+        self.assertEqual(sum(x == "V" for x in activos.values()), 0)  # el GIF muestra la malla final, sin V
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(gif_camino.gif_exploracion(datos, Path(tmp) / "e.gif"), len(cuadros) + 1)
 
@@ -906,11 +911,11 @@ class TestExploracion(unittest.TestCase):
         return Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(malla=[5, 6], **cambios))
 
     def test_1_epsilon_mezcla_greedy_y_azar(self):
-        agente = self.agente(epsilon=0.5, semilla=0)
+        agente = self.agente(epsilon=0.5, semilla=1)
         camino = agente.buscar()
         self.assertEqual(set(agente.decisiones[1:]), {"exploracion", "explotacion"})
         self.assertEqual(agente.resultado()["exploraciones"], agente.decisiones.count("exploracion"))
-        self.assertEqual(camino, self.agente(epsilon=0.5, semilla=0).buscar())  # misma semilla, mismo camino
+        self.assertEqual(camino, self.agente(epsilon=0.5, semilla=1).buscar())  # misma semilla, mismo camino
 
     def test_2_con_epsilon_0_es_greedy_puro(self):
         agente = self.agente(epsilon=0.0)

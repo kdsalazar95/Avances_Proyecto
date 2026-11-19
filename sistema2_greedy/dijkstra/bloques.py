@@ -30,6 +30,7 @@ Todas las mallas simuladas (aceptadas y descartadas) quedan en la caché de la c
 frente de Pareto de la exploración y no se vuelven a simular en otros episodios.
 """
 
+import time
 from dataclasses import dataclass
 
 from malla import Malla  # noqa: E402 (cgra/src/ del simulador)
@@ -157,6 +158,15 @@ def paso_tipo(descenso, estado, malla, evaluacion, accion, pe, de, a, quien, ace
     }
 
 
+def _tiempos(t, t_decision, evaluacion, repetida):
+    """Agrega al paso lo que tardó la decisión de Greedy (o del azar), lo que costó evaluar la malla
+    (``tiempo_s`` de la evaluación; si vino de la caché, lo que tardó cuando se simuló) y si la malla ya
+    se había probado en esta corrida (``repetida``: no se vuelve a evaluar, no cuesta tiempo)."""
+    t.update(tiempo_decision_s=round(t_decision, 4), tiempo_evaluacion_s=getattr(evaluacion, "tiempo_s", None),
+             repetida=repetida)
+    return t
+
+
 def _cambiar(malla, f, c, letra):
     return tuple(tuple(letra if (i, j) == (f, c) else t for j, t in enumerate(fila)) for i, fila in enumerate(malla))
 
@@ -175,6 +185,7 @@ def fase_tipos(agente, d, estado, malla, c_actual, azar, trayectoria, decisiones
     while True:
         if simuladas >= p.max_cambios_tipo:
             return malla, c_actual, "tope"
+        t_decision = time.monotonic()
         opciones = {}
         for f, fila in enumerate(malla):
             for c in range(1, len(fila) - 1):  # el interior: las columnas de memoria no se tocan
@@ -199,10 +210,12 @@ def fase_tipos(agente, d, estado, malla, c_actual, azar, trayectoria, decisiones
         vistas.add(nueva)
         conf = agente.configuracion(nueva)
         es_nueva = agente._clave(conf) not in agente.cache_episodios
-        ev, _ = agente.simular_episodio(conf)
+        t_decision = time.monotonic() - t_decision
+        ev, repetida = agente.simular_episodio(conf)
         simuladas += 1
         aceptada = ev.estado == CORRECTA and ev.costo is not None and ev.costo < c_actual - tolerancia
-        trayectoria.append(paso_tipo(d, estado, nueva, ev, accion, pe, de, a, quien, aceptada, es_nueva, estimado))
+        trayectoria.append(_tiempos(paso_tipo(d, estado, nueva, ev, accion, pe, de, a, quien, aceptada, es_nueva,
+                                              estimado), t_decision, ev, repetida))
         if aceptada:
             malla, c_actual = nueva, ev.costo
         else:
@@ -226,6 +239,7 @@ def descender(agente, azar):
     niveles = [b for b in p.bloques if b >= 1]
     i, parada = 0, None
     while i < len(niveles):
+        t_decision = time.monotonic()
         b = niveles[i]
         opciones, mallas = {}, set()
         for accion in PREFERENCIA:
@@ -249,9 +263,11 @@ def descender(agente, azar):
         nuevo = opciones[accion]
         conf = agente.configuracion(d.malla(nuevo))
         nueva = agente._clave(conf) not in agente.cache_episodios
-        ev, _ = agente.simular_episodio(conf)
+        t_decision = time.monotonic() - t_decision
+        ev, repetida = agente.simular_episodio(conf)
         aceptada = ev.estado == CORRECTA and ev.costo is not None and ev.costo < c_actual - tolerancia
-        trayectoria.append(paso(d, nuevo, ev, accion, b, quien, aceptada, nueva, estimados[accion]))
+        trayectoria.append(_tiempos(paso(d, nuevo, ev, accion, b, quien, aceptada, nueva, estimados[accion]),
+                                    t_decision, ev, repetida))
         if aceptada:
             estado, c_actual = nuevo, ev.costo
         else:

@@ -28,7 +28,7 @@
   },
   "tolerancia_empate_costo": 1e-09,
   "limites": {
-    "t_max_simulacion_s": 60
+    "t_max_simulacion_s": 36000
   },
   "restricciones": {
     "filas": {"minimo": 1, "maximo": 32},
@@ -36,8 +36,7 @@
     "palabras_memoria_max": 4096,
     "anchos_vector_permitidos": [4],
     "memoria_solo_en_bordes_oeste_este": true,
-    "requiere_memoria_y_computo": true,
-    "requiere_escalar_y_vectorial": true
+    "requiere_memoria_y_computo": true
   },
   "referencia": {
     "malla": ["M E M", "M V M", "M E M"],
@@ -48,8 +47,8 @@
     "formula_latencia": "'ciclos_x_nops': C_L = ciclos·(1 + NOPs/(ciclos·PEs)). 'ciclos': C_L = ciclos. Se calcula por operación.",
     "costo": "C = promedio sobre las operaciones de (K_A·C_A/C_A_ref + K_L·C_L,op/C_L_ref,op + K_R·C_R,op), solo si todas son correctas. Si no, C = P_fallo.",
     "tolerancias": "Correcta solo si cada elemento cumple |y − ŷ| ≤ eps_abs + eps_rel·|y|. C_R = promedio de |y − ŷ|/(|y| + epsilon_cr).",
-    "limites.t_max_simulacion_s": "El simulador (run_cgra.py) corre en otro proceso con este tiempo máximo; si lo supera, fallo_simulador.",
-    "restricciones": "Validación previa (rl/agente/paquete.py): columnas oeste y este solo M, interior E/V, al menos un PE de memoria y uno de cómputo, y al menos un PE escalar (E) y uno vectorial (V) (requiere_escalar_y_vectorial; esta regla es propia de Dijkstra + Greedy, no del RL). Lo que no cumple es accion_invalida.",
+    "limites.t_max_simulacion_s": "El simulador (run_cgra.py) corre en otro proceso con este tiempo máximo; si lo supera, fallo_simulador. 36000 s (10 h), el mismo valor en los dos sistemas: la 32x32 necesita horas.",
+    "restricciones": "Validación previa (rl/agente/paquete.py): columnas oeste y este solo M, interior E/V, al menos un PE de memoria y uno de cómputo; las mismas del Sistema 1 (no se exige tener E y V a la vez: una malla puede ser solo E o solo V). Lo que no cumple es accion_invalida.",
     "referencia": "Referencia de normalización (la 3x3 del RL), no el punto de partida de la búsqueda (ese es punto_partida en agente.json). 'normalizadores': C_A_ref y C_L_ref por operación medidos una vez con la solución RL y congelados; una operación que no esté en el archivo se normaliza con la referencia medida por este evaluador."
   }
 }

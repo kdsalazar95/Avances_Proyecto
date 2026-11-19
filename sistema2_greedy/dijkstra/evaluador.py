@@ -101,6 +101,7 @@ class Evaluacion:
     errores: list = field(default_factory=list)
     normalizadores: dict = None
     costo_medido: float = None  # promedio de los costos por operación, aunque no sea correcta
+    tiempo_s: float = None  # tiempo de reloj de toda la evaluación (Dijkstra + simulador); lo pone el agente
 
     @property
     def valida(self):

@@ -60,7 +60,7 @@ from formato_cgra import generar_malla  # noqa: E402 (cgra/src/ del simulador)
 from malla import Malla  # noqa: E402
 from topologia import DESPLAZAMIENTO, DIRECCIONES  # noqa: E402
 
-from .contrato import (COMPUTO_OPS, CORRECTA, ESCALAR_OPS, MEMORIA_OPS, NO_ATRIBUIBLES, VECTORIAL_OPS, Costos,
+from .contrato import (COMPUTO_OPS, CORRECTA, MEMORIA_OPS, NO_ATRIBUIBLES, Costos,
                        recompensa)
 from .mapeador import Opciones
 
@@ -328,7 +328,10 @@ class Agente:
         self._vistos.add(clave)
         if clave in self.cache_episodios:
             return self.cache_episodios[clave], repetido
+        inicio = time.monotonic()
         e = self.medir(configuracion)
+        if getattr(e, "tiempo_s", None) is None:
+            e.tiempo_s = round(time.monotonic() - inicio, 3)  # queda en la caché: el tiempo que costó evaluarla
         if e.estado not in NO_ATRIBUIBLES:  # un fallo de infraestructura se puede reintentar
             self.cache_episodios[clave] = e
         if self.al_simular:
@@ -475,16 +478,12 @@ class Agente:
     # -- historia del camino ----------------------------------------------------------
     def cumple_tipos(self, tipos):
         """Si un conjunto de tipos de PE cumple las reglas de tipos de costos.json: al menos un PE de
-        memoria y uno de cómputo (``requiere_memoria_y_computo``) y al menos un escalar (E) y un
-        vectorial (V) (``requiere_escalar_y_vectorial``). Las reglas de bordes no aplican: el camino
-        no es un rectángulo."""
+        memoria y uno de cómputo (``requiere_memoria_y_computo``). Las reglas de bordes no aplican: el
+        camino no es un rectángulo."""
         r = self.costos.restricciones
         por_tipo = [{i.upper() for i in self.base["tipos_pe"][t]["instrucciones"]} for t in tipos]
         todas = set().union(*por_tipo)
         if r.get("requiere_memoria_y_computo") and not (todas & MEMORIA_OPS and todas & COMPUTO_OPS):
-            return False
-        if r.get("requiere_escalar_y_vectorial") and not (
-                any(ops & ESCALAR_OPS for ops in por_tipo) and any(ops & VECTORIAL_OPS for ops in por_tipo)):
             return False
         return True
 

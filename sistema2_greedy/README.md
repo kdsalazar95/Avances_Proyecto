@@ -4,12 +4,53 @@ Es uno de los dos sistemas que se contrastan en el proyecto:
 
 | | Agente | Evaluador (genera los PE*.txt) |
 |---|---|---|
-| Sistema 1 (`rl/`) | LLM, sin Greedy | Skills 01-09 (LLM) |
+| Sistema 1 (`rl/`, rama `feature/sistema1-llm`) | LLM, sin Greedy | Skills 01-09 (LLM) |
 | **Sistema 2 (esta carpeta)** | **ε-greedy, sin LLM** | **Dijkstra** (sustituye los skills 04-07) |
 
 Este sistema **no usa ningún LLM**: Greedy explota y, con probabilidad `epsilon`, se explora con
 una acción al azar. Las ecuaciones de costo, el simulador y los normalizadores son los mismos del
 Sistema 1, para que los resultados se puedan comparar.
+
+## Comparación con el Sistema 1
+
+Mismas condiciones que el Sistema 1 (`rl/config/comparacion.json` en su rama):
+
+- **La misma referencia 32x32:** la de `cgra.json` (fila 0 escalar E, fila 1 vectorial V, alternadas, con M en las
+  columnas 0 y 31; `malla: [32, 32]` en `config/agente.json`). Es el punto de partida de cada episodio.
+- **Los mismos normalizadores fijos** (`config/normalizacion.json`, el mismo archivo del Sistema 1): con ellos
+  un mismo C significa lo mismo en los dos sistemas.
+- **Las mismas restricciones:** memoria solo en los bordes, al menos un PE de memoria y uno de cómputo. No se
+  exige tener un E y un V a la vez.
+- **Los mismos pesos, K, tolerancias, P_fallo y tiempo máximo de simulación (36000 s).**
+- **Los dos con episodios y el mismo barrido:** epsilon 0, 10, 20, 80, 90 y 100 %, y paciencia 3, 6 y 10.
+
+```bash
+# Una corrida por epsilon con paciencia 10 y tope de 30 episodios (la referencia se simula una vez; cada corrida
+# hereda las simulaciones de la anterior). Paciencia 3 y 6 salen de cortar esas mismas corridas.
+python3 herramientas/barrido.py --epsilons 0 10 20 80 90 100
+python3 herramientas/convergencia.py resultados/<corrida>                      # rehace los datos de una corrida
+python3 herramientas/convergencia.py DIR1 DIR2 ... --salida resultados/<comp>  # junta varias corridas
+```
+
+Una corrida deja **solo los datos de la comparación** (más los archivos que usa `--continuar`):
+
+| Archivo | Contenido |
+|---|---|
+| `convergencia.csv` | Una fila por malla propuesta (n = 0 la referencia): quién la propuso (`greedy`, `exploracion`), estado, tamaño, C, C_A, C_A_norm, C_L_norm, C_R, `C_best` hasta ahí, si mejoró, tiempo de decisión, de evaluación y acumulado |
+| `convergencia.json` | Resumen: epsilon, motivo de fin, evaluaciones, C_ref, C_best, mejora relativa, **convergencia** (evaluación y tiempo en que se alcanzó el mejor C) e **hitos** del 50, 90 y 100 % de la mejora |
+| `<id>-comparacion/comparacion_epsilon.csv` | Una fila por epsilon y paciencia (6 x 3 = 18): la tabla para comparar tiempos de convergencia |
+| `<id>-comparacion/curvas_epsilon.csv` | C y C_best de cada evaluación de cada epsilon y paciencia: las curvas de cómo baja la función de costo |
+
+**Paciencia sin correr de más.** La paciencia solo decide cuándo se deja de intentar: con la misma semilla, una
+corrida con paciencia 3 hace los mismos primeros episodios que una con paciencia 10 y se detiene antes. Por eso
+cada epsilon se corre una vez, con paciencia 10, y `convergencia.py` corta esa corrida donde se habrían detenido
+las de paciencia 3 y 6 (la misma regla de `Agente.correr`; una prueba compara el corte con una corrida real de
+paciencia 3). `convergencia.json` trae el resumen de cada paciencia en `por_paciencia`.
+
+Las columnas son las mismas del Sistema 1 (columna `sistema`), así que los archivos de los dos se pueden juntar.
+El tiempo de una malla es lo que tardó su evaluación (Dijkstra + simulador) cuando se simuló, aunque venga de la
+caché; una malla que se repite en la misma corrida no cuenta tiempo. Las tablas, gráficas (Pareto, curvas, GIF) y
+`reporte_corrida.md` de antes solo se escriben con `--informes` (o después, con `herramientas/regenerar_informes.py`).
 
 ## Ciclo de retroalimentación
 
@@ -32,6 +73,8 @@ Un solo comando corre el ciclo completo, desde `sistema2_greedy/`:
 python3 agente_greedy.py                          # resultados en resultados/greedy/
 python3 agente_greedy.py --salida resultados/otra  # otra carpeta (no pisa resultados anteriores)
 python3 agente_greedy.py --continuar --salida resultados/greedy   # reusa la simulación guardada
+python3 agente_greedy.py --epsilon 0.2 --salida resultados/eps020  # otro epsilon que el de config/agente.json
+python3 agente_greedy.py --informes                # además: tablas, gráficas y reporte_corrida.md
 ```
 
 1. **Skills 01-03.** Compila `cgra/operaciones/operaciones.c`: `operaciones.ll` y `memoria.bin`
@@ -76,7 +119,7 @@ python3 agente_greedy.py --continuar --salida resultados/greedy   # reusa la sim
 **Modo de exploración** (`modo` en `config/agente.json`). Por defecto es `bloques`: en lugar de los
 pasos 4 a 6, cada episodio es un **descenso desde la malla de referencia**. Se quitan bloques de filas o de
 columnas interiores (del inicio o del final; tamaños `bloques` = 16, 8, 4, 2, 1), manteniendo las columnas
-M en los bordes y al menos una fila E y una V. Greedy elige la acción de menor C estimado; con probabilidad
+M en los bordes (con las mismas restricciones del Sistema 1: una malla puede ser solo E o solo V). Greedy elige la acción de menor C estimado; con probabilidad
 `epsilon` se elige una acción al azar. Cada
 malla propuesta **se simula**: si su C real baja respecto a la actual se acepta y el descenso sigue con el
 mismo bloque; si sube se descarta y se prueba otra acción; sin acciones que mejoren se pasa al bloque
@@ -90,7 +133,7 @@ guarda tras cada simulación) y son los puntos del frente de Pareto de la explor
 posición de cada tipo de PE: el interior fila por fila entre las columnas M (`2x4 [VE/VV]` = `M V E M / M V V M`).
 `python3 herramientas/regenerar_informes.py resultados/<corrida>` rehace tablas, gráficas, GIF y reporte de
 una corrida terminada sin simular. `modo: "camino"` es el modo de los
-pasos 4 a 6. Al terminar, la corrida escribe la **tabla completa de resultados** de todas las configuraciones
+pasos 4 a 6. Con `--informes`, al terminar la corrida escribe la **tabla completa de resultados** de todas las configuraciones
 evaluadas (`configuraciones.csv`, una fila por configuración; `configuraciones_operaciones.csv`, una fila por
 configuración y operación con las instrucciones por tipo; `configuraciones.json`): costos (C, C_A, C_L, C_R),
 y por operación ciclos (total, cómputo, comunicación, inactivos), instrucciones (memoria, cálculo,
@@ -185,6 +228,8 @@ dijkstra/
   validacion_programas.py   skill 09 (E03): validación de los PE*.txt
   simulacion.py       el simulador de cgra/src/ en otro proceso
   dfg.py              grafo de datos y resultado esperado
+herramientas/         convergencia.py y barrido.py (la comparación); pareto.py, gif_camino.py y
+                      regenerar_informes.py (tablas y gráficas, con --informes)
 tests/                pruebas (python3 sistema2_greedy/tests/run_tests.py)
 ```
 

@@ -244,6 +244,12 @@ def main(argv=None):
                         help="Segundos entre avisos mientras una simulación corre (0 = sin avisos)")
     parser.add_argument("--continuar", action="store_true",
                         help="Reusar la simulación de la malla guardada en --salida (si es la misma malla)")
+    parser.add_argument("--epsilon", type=float, help="Cambia el epsilon de config/agente.json (0 a 1)")
+    parser.add_argument("--paciencia", type=int, help="Cambia la paciencia de config/agente.json")
+    parser.add_argument("--max-episodios", type=int, help="Cambia max_episodios de config/agente.json")
+    parser.add_argument("--informes", action="store_true",
+                        help="Además de convergencia.csv/.json, escribir las tablas, gráficas (Pareto, curvas, GIF) "
+                             "y reporte_corrida.md (modo bloques)")
     args = parser.parse_args(argv)
     from dijkstra import reporte_corrida
     inicio_reloj = reporte_corrida.ahora()
@@ -263,6 +269,14 @@ def main(argv=None):
         parametros.procesos = args.procesos
     if args.mapeador_procesos is not None:
         parametros.mapeador_procesos = args.mapeador_procesos
+    if args.epsilon is not None:
+        if not 0 <= args.epsilon <= 1:
+            parser.exit(1, "--epsilon debe estar entre 0 y 1\n")
+        parametros.epsilon = args.epsilon
+    if args.paciencia is not None:
+        parametros.paciencia = args.paciencia
+    if args.max_episodios is not None:
+        parametros.max_episodios = args.max_episodios
 
     operaciones = operaciones_del_c()
     try:
@@ -291,7 +305,9 @@ def main(argv=None):
     if evaluacion is None:
         print(f"Simulando la malla {len(malla)}x{len(malla[0])} (Dijkstra + simulador, una vez; "
               f"en 32x32 tarda horas)...", flush=True)
+        t_referencia = time.monotonic()
         evaluacion = agente.medir(configuracion)
+        evaluacion.tiempo_s = round(time.monotonic() - t_referencia, 3)
         _escribir_json(ruta_evaluacion, {"configuracion": configuracion, "evaluacion": evaluacion.como_dict(),
                                          "huella": huella, "marca_tiempo": _ahora()})
     else:
@@ -383,13 +399,21 @@ def main(argv=None):
                                f"C real = {_numero(agente.c_best)}" if agente.mejor else
                                f"ninguna malla mejoró el C de la referencia ({costo})")
               + f"; malla de referencia: C = {costo}")
-        t_fase = time.monotonic()
-        informes_finales(args.salida)
-        fases["informes (tablas y gráficas)"] = time.monotonic() - t_fase
-        generar_reporte(args.salida, agente, medidor, fases, inicio_reloj, monitor)
-        print(f"Resultados en {args.salida}: reporte_corrida.md, configuraciones.csv, configuraciones_operaciones.csv, "
-              f"configuraciones.json, frente_pareto.png, curva_costos.png, curva_episodios.png, exploracion.gif, "
-              f"episodios.json, camino.json, evaluaciones_episodios.json, evaluacion_malla.json, resumen.json")
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "herramientas"))
+        import convergencia
+        datos = convergencia.escribir(args.salida)
+        print(f"Convergencia: C_ref = {_numero(datos['C_ref'])}, C_best = {_numero(datos['C_best'])}, "
+              f"convergió en la evaluación {(datos['convergencia'] or {}).get('evaluacion')} de "
+              f"{datos['evaluaciones']} ({_duracion((datos['convergencia'] or {}).get('tiempo_s') or 0)})", flush=True)
+        if args.informes:  # las tablas, gráficas y el reporte de antes, solo si se piden
+            t_fase = time.monotonic()
+            informes_finales(args.salida)
+            fases["informes (tablas y gráficas)"] = time.monotonic() - t_fase
+            generar_reporte(args.salida, agente, medidor, fases, inicio_reloj, monitor)
+        else:
+            monitor.detener()
+        print(f"Resultados en {args.salida}: convergencia.csv, convergencia.json (y, para --continuar, episodios.json, "
+              f"evaluaciones_episodios.json, evaluacion_malla.json, camino.json, resumen.json)")
         return 0
     historia = agente.historia()
     _escribir_json(args.salida / "historia.json", historia)

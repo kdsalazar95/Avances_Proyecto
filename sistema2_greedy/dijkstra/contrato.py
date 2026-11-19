@@ -188,12 +188,6 @@ def validar_accion(datos, formato, restricciones, tipos_esquema):
             motivos.append("la malla no tiene ningún PE de memoria")
         if not ops & COMPUTO_OPS:
             motivos.append("la malla no tiene ningún PE de cómputo")
-    if r.get("requiere_escalar_y_vectorial"):
-        por_pe = [{i.upper() for i in formato.tipos_pe[l]["instrucciones"]} for l in usados]
-        if not any(ops & ESCALAR_OPS for ops in por_pe):
-            motivos.append("la malla no tiene ningún PE escalar (E)")
-        if not any(ops & VECTORIAL_OPS for ops in por_pe):
-            motivos.append("la malla no tiene ningún PE vectorial (V)")
     if r.get("memoria_solo_en_bordes_oeste_este"):
         motivos += _motivos_bordes(formato)
     return motivos

@@ -92,17 +92,39 @@ class TestCicloCompleto(_ConOperaciones):
             parametros.write_text(json.dumps(dict(malla=[3, 3], inicio=[0, 0], epsilon=0.0, semilla=0, procesos=1,
                                                   modo="bloques", bloques=[1], max_episodios=2, paciencia=1)))
             salida = tmp / "resultados"
-            self.assertEqual(self.correr(salida, parametros, "--latido", "0"), 0)
+            self.assertEqual(self.correr(salida, parametros, "--latido", "0", "--informes"), 0)
             episodios = json.loads((salida / "episodios.json").read_text())
             resumen = json.loads((salida / "resumen.json").read_text())
+            convergencia = json.loads((salida / "convergencia.json").read_text())
             reporte = json.loads((salida / "reporte_corrida.json").read_text())
             texto_reporte = (salida / "reporte_corrida.md").read_text()
             tabla = (salida / "configuraciones.csv").read_text().splitlines()
             graficas = [n for n in ("frente_pareto.png", "curva_costos.png", "exploracion.gif") if (salida / n).exists()]
             cache = json.loads((salida / "evaluaciones_episodios.json").read_text())
+            for archivo in ("reporte_corrida.json", "configuraciones.csv", "convergencia.json"):
+                (salida / archivo).unlink()
             with mock.patch.object(agente_greedy, "medir_en_paralelo", side_effect=AssertionError):
                 self.assertEqual(self.correr(salida, parametros, "--continuar", "--latido", "0"), 0)
             otra_vez = json.loads((salida / "episodios.json").read_text())
+            # sin --informes la corrida deja solo los datos de convergencia (y lo que necesita --continuar)
+            self.assertFalse((salida / "reporte_corrida.json").exists())
+            self.assertFalse((salida / "configuraciones.csv").exists())
+            convergencia_2 = json.loads((salida / "convergencia.json").read_text())
+            filas = (salida / "convergencia.csv").read_text().splitlines()
+        # datos de convergencia: la referencia es n = 0, cada malla propuesta una fila, tiempos reales
+        self.assertEqual(convergencia["sistema"], "sistema2_greedy")
+        self.assertEqual(convergencia["evaluaciones"], len(filas) - 2)  # menos el encabezado y la referencia
+        self.assertGreater(convergencia["tiempo_total_s"], 0)  # Dijkstra + simulador de verdad
+        self.assertEqual(convergencia["evaluaciones_sin_tiempo"], 0)
+        # con --continuar todo sale de la caché, pero los tiempos son los de cuando se simuló
+        def sin_tiempos(c):
+            otros = ("tiempo_total_s", "convergencia", "hitos", "por_paciencia")
+            return {**{k: v for k, v in c.items() if k not in otros},
+                    "convergencia": c["convergencia"]["evaluacion"],
+                    "hitos": {p: (h or {}).get("evaluacion") for p, h in c["hitos"].items()},
+                    "por_paciencia": {p: sin_tiempos(r) for p, r in (c.get("por_paciencia") or {}).items()}}
+        self.assertEqual(sin_tiempos(convergencia_2), sin_tiempos(convergencia))
+        self.assertAlmostEqual(convergencia_2["tiempo_total_s"], convergencia["tiempo_total_s"], delta=0.05)
         self.assertEqual(episodios["modo"], "bloques")
         # reporte, tabla y gráficas al final de la corrida
         self.assertEqual(reporte["configuraciones"]["evaluadas"], len(tabla) - 1)
@@ -122,11 +144,72 @@ class TestCicloCompleto(_ConOperaciones):
         self.assertEqual(resumen["modo"], "bloques")
         self.assertEqual(resumen["configuraciones_simuladas"], len(cache["episodios"]))
         def sin_contadores(eps):  # con --continuar todo sale de la caché: cambian solo "nuevas"/"nueva"
+            # (y el tiempo de decisión de Greedy, que se mide en cada corrida)
             return [{**{k: v for k, v in e.items() if k not in ("nuevas", "duracion_s")},
-                     "trayectoria": [{k: v for k, v in t.items() if k != "nueva"} for t in e["trayectoria"]]}
+                     "trayectoria": [{k: v for k, v in t.items() if k not in ("nueva", "tiempo_decision_s")}
+                                     for t in e["trayectoria"]]}
                     for e in eps]
         self.assertEqual(sin_contadores(otra_vez["episodios"]), sin_contadores(episodios["episodios"]))
         self.assertEqual([e["nuevas"] for e in otra_vez["episodios"]], [0] * len(otra_vez["episodios"]))
+
+    def test_barrido_de_epsilon(self):
+        """herramientas/barrido.py: una corrida por epsilon con el evaluador real; la referencia se simula una
+        sola vez y cada corrida hereda las simulaciones de la anterior; la comparación junta las corridas en el
+        formato del Sistema 1; volver a correr el barrido no repite corridas terminadas."""
+        sys.path.insert(0, os.path.join(_raiz_dg, "herramientas"))
+        import barrido
+        import convergencia
+        self.assertEqual(barrido.leer_epsilons(["0", "10", "20", "80", "90", "100"]), [0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            parametros = tmp / "agente.json"
+            parametros.write_text(json.dumps(dict(malla=[3, 3], inicio=[0, 0], epsilon=0.0, semilla=0, procesos=1,
+                                                  modo="bloques", bloques=[1], max_episodios=2, paciencia=1)))
+            medidas = []
+            real = agente_greedy.medir_en_paralelo
+
+            def contar(conf, *a, **k):
+                medidas.append(tuple(conf["malla"]))
+                return real(conf, *a, **k)
+
+            def correr(argv):
+                salida = Path(argv[argv.index("--salida") + 1])
+                return self.correr(salida, parametros, *[x for x in argv if x != str(salida) and x != "--salida"],
+                                   "--latido", "0")
+
+            with mock.patch.object(agente_greedy, "medir_en_paralelo", contar):
+                carpetas, resumenes = barrido.barrido([0.0, 1.0], "s2", tmp / "resultados", correr=correr)
+            self.assertEqual([c.name for c in carpetas], ["s2-eps000", "s2-eps100"])
+            self.assertEqual(medidas.count(("M E M", "M V M", "M E M")), 1)  # la referencia, una vez
+            self.assertEqual(len(medidas), len(set(medidas)))  # ninguna malla se simula dos veces
+            # una corrida por epsilon con paciencia 10 y tope 30; la comparación tiene cada epsilon x paciencia
+            self.assertEqual([(r["epsilon"], r["paciencia"]) for r in resumenes],
+                             [(0.0, 3), (0.0, 6), (0.0, 10), (1.0, 3), (1.0, 6), (1.0, 10)])
+            episodios_1 = json.loads((carpetas[1] / "episodios.json").read_text())
+            self.assertEqual((episodios_1["epsilon"], episodios_1["paciencia"], episodios_1["max_episodios"]),
+                             (1.0, 10, 30))
+            tabla = (tmp / "resultados" / "s2-comparacion" / "comparacion_epsilon.csv").read_text().splitlines()
+            self.assertEqual(tabla[0].split(","), list(convergencia.COLUMNAS_COMPARACION))
+            self.assertEqual(len(tabla), 7)
+            self.assertEqual(resumenes[-1]["fraccion_exploracion"], 1.0)
+            episodios = [r["episodios"] for r in resumenes[3:]]
+            self.assertEqual(episodios, sorted(episodios))  # más paciencia, al menos tantos episodios
+            # cortar la corrida de paciencia 10 da lo mismo que correr con paciencia 3
+            directa = tmp / "directa"
+            self.assertEqual(self.correr(directa, parametros, "--epsilon", "1.0", "--paciencia", "3",
+                                         "--max-episodios", "30", "--latido", "0"), 0)
+            n, motivo = convergencia.corte(episodios_1["episodios"], 3, episodios_1["motivo_fin"])
+            real = json.loads((directa / "episodios.json").read_text())
+            self.assertEqual((n, motivo), (len(real["episodios"]), real["motivo_fin"]))
+
+            def sin_tiempos(filas):
+                return [{k: v for k, v in f.items() if not k.startswith("tiempo") and k not in ("corrida",)}
+                        for f in filas]
+            self.assertEqual(sin_tiempos(convergencia.filas_corrida(carpetas[1], n)),
+                             sin_tiempos(convergencia.filas_corrida(directa)))
+            # ya terminadas: no se vuelven a correr
+            self.assertEqual(barrido.barrido([0.0, 1.0], "s2", tmp / "resultados",
+                                             correr=lambda argv: self.fail("no debía correr"))[0], carpetas)
 
     def test_continuar_no_reusa_con_otro_programa(self):
         """Si cambió operaciones.c (o costos/normalizadores), --continuar no reusa la simulación guardada."""
