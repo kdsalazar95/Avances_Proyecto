@@ -1,11 +1,11 @@
 """Curva de costo y GIF del camino de una corrida del agente Greedy, a partir de ``historia.json``.
 
-    python3 herramientas/gif_camino.py resultados/<corrida>            # desde dijkstra_greedy/
+    python3 herramientas/gif_camino.py resultados/<corrida>            # desde sistema2_greedy/
     python3 herramientas/gif_camino.py resultados/<corrida> --ms 150 --max-cuadros 200
 
 Escribe en la carpeta de la corrida (o en ``--salida``):
 
-    curva_costo.png  C del prefijo del camino en cada paso, con los pasos del agente RL marcados y
+    curva_costo.png  C del prefijo del camino en cada paso, con los pasos de exploración marcados y
                      el de menor C entre los que cumplen los tipos de PE (``mejor`` de la historia)
     camino.gif       un cuadro por paso: la malla con los PEs del camino resaltados y la curva hasta ese paso
 
@@ -22,11 +22,11 @@ En el modo ``bloques`` (descenso por bloques desde la malla de referencia) no ha
     curva_costos.png       la curva de costos: el C real de cada malla probada, en orden (las aceptadas unidas
                            por episodio, las descartadas marcadas y el mejor C)
     exploracion.gif        la malla de PEs durante toda la reducción por bloques: por cada decisión, quién la
-                           toma (Greedy o el agente LLM), el bloque propuesto y el resultado (aceptada: la malla
+                           toma (Greedy o la exploración al azar), el bloque propuesto y el resultado (aceptada: la malla
                            se reduce; descartada: se marca en rojo), con la curva de costos al lado
 
 Es determinística: la misma ``historia.json`` da los mismos archivos, byte por byte (sin fechas ni
-versiones en los metadatos, sin azar). No simula ni llama al agente RL: solo dibuja lo que guardó la
+versiones en los metadatos, sin azar). No simula: solo dibuja lo que guardó la
 corrida. Si la corrida es anterior a ``historia.json``, la reconstruye una vez con ``Agente.historia``
 desde ``camino.json``, ``evaluacion_malla.json`` y ``resumen.json`` (sin simular) y la guarda.
 """
@@ -134,7 +134,7 @@ def _dibujar_curva(ax, historia, hasta):
         ax.scatter(*zip(*no), s=10, color=COLOR_NO_CUMPLE, zorder=3, label="no cumple tipos de PE")
     rl = [(p["pes"], p["C"]) for p in pasos if p["decision"] in ("rl", "rl_invalida", "exploracion")]
     if rl:
-        ax.scatter(*zip(*rl), s=28, color=COLOR_RL, marker="D", zorder=4, label="paso del agente RL")
+        ax.scatter(*zip(*rl), s=28, color=COLOR_RL, marker="D", zorder=4, label="paso de exploración")
     mejor = historia.get("mejor")
     if mejor is not None and mejor["paso"] <= hasta:
         ax.scatter([mejor["pes"]], [mejor["C"]], s=120, color=COLOR_MEJOR, marker="*", zorder=5,
@@ -360,8 +360,9 @@ def gif_episodios(datos, historia, ruta, ms=1600, ms_final=4000):
 
 # -- modo bloques ----------------------------------------------------------------------------
 COLOR_ACEPTADA, COLOR_DESCARTADA, COLOR_PROPUESTA, COLOR_QUITADO = "#2a9d8f", "#c0392b", "#d94fa8", "#e9e9e9"
-QUIEN = {"explotacion": "Greedy", "rl": "Agente LLM", "rl_invalida": "Greedy (respuesta del LLM inválida)",
-         "exploracion": "Exploración al azar", "inicio": "inicio"}
+QUIEN = {"explotacion": "Greedy", "exploracion": "Exploración al azar", "inicio": "inicio",
+         # corridas híbridas anteriores a la separación de los sistemas (el agente consultaba un LLM)
+         "rl": "Agente LLM (corrida híbrida)", "rl_invalida": "Greedy (respuesta del LLM inválida)"}
 
 
 def pasos_exploracion(datos):
@@ -584,7 +585,7 @@ def cuadros_exploracion(datos):
                        "terminar la fase de tipos" if t.get("fase") == "tipos" else "terminar el descenso")
                 cuadros.append({"tipo": "control", "ep": ep["n"], "rect": rect, "malla": actual,
                                 "bloque": t["bloque"], "fase": t.get("fase"),
-                                "texto": f"El agente LLM decide {t['accion']}: {que}"})
+                                "texto": f"El agente LLM (corrida híbrida) decide {t['accion']}: {que}"})
                 continue
             quien = QUIEN.get(t["quien"], t["quien"])
             if t.get("fase") == "tipos":

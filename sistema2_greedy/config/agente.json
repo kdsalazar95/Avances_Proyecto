@@ -1,0 +1,46 @@
+{
+  "descripcion": "Parámetros del agente del Sistema 2 (Greedy + Dijkstra, sin LLM): política epsilon-greedy (con probabilidad epsilon se explora con una acción al azar; si no, Greedy elige la de menor costo C estimado). Se repiten episodios (max_episodios, paciencia): cada malla propuesta se simula y su C real vuelve al agente (se acepta si baja; mejor C y paciencia). Los pesos w1-w4, K, tolerancias, restricciones y normalizadores están en costos.json, con los mismos valores del Sistema 1.",
+  "malla": [
+    32,
+    32
+  ],
+  "inicio": [
+    0,
+    0
+  ],
+  "epsilon": 0.3,
+  "semilla": 0,
+  "max_episodios": 10,
+  "paciencia": 3,
+  "max_extension": 10,
+  "modo": "bloques",
+  "bloques": [
+    16,
+    8,
+    4,
+    2,
+    1
+  ],
+  "tipos": true,
+  "max_cambios_tipo": 40,
+  "procesos": null,
+  "mapeador_procesos": 32,
+  "t_max_simulacion_s": 36000,
+  "comentarios": {
+    "malla": "La malla del grafo: [filas, columnas] con la distribución de cgra.json (por defecto [32, 32], la más pesada) o una lista de filas como [\"M E M\", \"M V M\"]. Cada PE es un vértice y cada conexión con un vecino norte, sur, este u oeste es una arista.",
+    "peso": "Peso de un PE = w_tipo · (1 + NOPs/ciclos). w_tipo es el área de su tipo con pesos_area (w1-w4) de costos.json: M = 12, E = 1, V = 2. NOPs y ciclos salen del reporte_ciclos.txt del simulador, sumados sobre las operaciones. Para tenerlos, la malla se mapea con Dijkstra y se simula una vez (en 32x32, horas); --continuar reusa esa simulación.",
+    "inicio": "[fila, columna] del PE donde empieza el camino; [0, 0] es PE00 (PE0000 en mallas de 11 o más filas o columnas). El camino termina cuando el PE actual no tiene vecinos sin visitar. Ningún PE se visita dos veces: no hay ciclos.",
+    "epsilon": "Política epsilon-greedy: en cada paso, con probabilidad epsilon se elige una acción al azar (exploración) y si no Greedy, la de menor costo C estimado. 0 = Greedy puro. Este sistema no usa LLM.",
+    "semilla": "Semilla del azar de la exploración: con la misma semilla y los mismos pesos sale el mismo camino. Cambiarla da otro camino con el mismo epsilon. Cada episodio n usa semilla + n (si no, todos los episodios darían el mismo camino).",
+    "procesos": "Procesos para simular las operaciones de la malla en paralelo (null = uno por operación).",
+    "mapeador_procesos": "Procesos que prueban los candidatos de cada operación en el mapeador (1 = secuencial). Dan exactamente el mismo mapeo y solo cambian el tiempo. Se limitan al mayor número de candidatos de una operación. Se puede cambiar con --mapeador-procesos.",
+    "t_max_simulacion_s": "Tiempo máximo del simulador para la malla, en segundos (el de costos.json es 60, pensado para mallas chicas).",
+    "max_episodios": "Ciclo de episodios (retroalimentación agente ↔ evaluador): tope de episodios por corrida (como max_iteraciones de rl/). Cada episodio recorre un camino, simula el rectángulo que lo contiene y obtiene su C real y su recompensa R = C_best_prev − C.",
+    "paciencia": "El ciclo termina si pasan estos episodios seguidos sin que baje el mejor C real (como en rl/). Un episodio que no mejora se descarta y cuenta; un rectángulo repetido también cuenta; un fallo de infraestructura no.",
+    "modo": "Cómo explora el agente. 'bloques' (por defecto): cada episodio parte de la malla de referencia (32x32) y la reduce quitando bloques de filas o columnas interiores, del inicio o del final; cada malla propuesta se simula y se acepta solo si su C real baja (si sube, se descarta y se prueba otra acción). Greedy elige la acción de menor C estimado y, con probabilidad epsilon, se elige una acción al azar. Todas las mallas simuladas son puntos del frente de Pareto (herramientas/pareto.py --exploracion). 'camino': el modo anterior, que crece un camino de PEs desde PE00 y simula su rectángulo al final del episodio.",
+    "bloques": "Modo bloques: tamaños de bloque, de mayor a menor. Se quita un bloque por paso; cuando ninguna acción del bloque baja el C real, se pasa al siguiente; el descenso termina cuando ni el último mejora.",
+    "tipos": "Modo bloques: fase de tipos después del descenso. Sobre la malla que quedó, cada acción cambia un PE del interior de escalar a vectorial o al revés (E <-> V; los PEs de memoria de los bordes no cambian). Greedy elige el cambio de menor C estimado (cambio de área exacto, latencia supuesta igual) y con probabilidad epsilon se elige un cambio al azar. Cada malla se simula y se acepta si su C real baja; termina cuando ningún cambio mejora.",
+    "max_cambios_tipo": "Tope de mallas simuladas en la fase de tipos de un episodio.",
+    "max_extension": "Seguir o parar (modo camino): en el punto de paro (el camino cumple los tipos y, según el estimado, ningún vecino baja C), con probabilidad epsilon el azar elige seguir de 0 a max_extension PEs más. El estimado usa la latencia de la malla completa y siempre prefiere menos PEs; así se pueden probar configuraciones más grandes. 0 = el camino siempre para en el punto de paro."
+  }
+}

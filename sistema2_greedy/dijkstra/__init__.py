@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 # El simulador es el de cgra/src/ (compartido con la solución RL, sin modificar).
-# Dijkstra + Greedy vive aparte, en dijkstra_greedy/.
+# Dijkstra + Greedy vive aparte, en sistema2_greedy/.
 RAIZ_DIJKSTRA_GREEDY = Path(__file__).resolve().parents[1]
 RAIZ_PROYECTO = RAIZ_DIJKSTRA_GREEDY.parent
 CARPETA_CONFIG = RAIZ_DIJKSTRA_GREEDY / "config"

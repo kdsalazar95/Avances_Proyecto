@@ -12,7 +12,7 @@ from unittest import mock
 
 _raiz_dg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(_raiz_dg), "cgra", "src"))  # simulador (cgra/src)
-sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (dijkstra_greedy/)
+sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (sistema2_greedy/)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import agente_greedy  # noqa: E402

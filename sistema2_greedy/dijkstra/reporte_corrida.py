@@ -7,8 +7,8 @@ Se genera al final de ``agente_greedy.py`` en ``reporte_corrida.md`` (para leer)
   cada episodio.
 * **Episodios:** cuántos, por qué terminó el ciclo y, por episodio, mallas probadas, simuladas,
   aceptadas y descartadas, malla final, costo y recompensa.
-* **Decisiones del agente:** cuántas tomó Greedy y cuántas el agente LLM (válidas, inválidas,
-  BAJAR/PARAR), la fracción observada frente a epsilon, y las consultas al LLM (tiempo, tiempos agotados).
+* **Decisiones del agente:** cuántas tomó Greedy y cuántas la exploración al azar, y la fracción de
+  exploración observada frente a epsilon (este sistema no usa LLM).
 * **Dijkstra y simulación:** mapeos hechos, tiempo de mapeo, validación y simulación por configuración y
   en total, fallos de mapeo y métricas del mapeo.
 * **Configuraciones:** evaluadas, correctas y fallidas (por estado), eficientes (Pareto) y dominadas, y las
@@ -25,8 +25,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-QUIEN = {"explotacion": "Greedy (explotación)", "rl": "Agente LLM", "rl_invalida": "Greedy por respuesta inválida del LLM",
-         "exploracion": "Exploración al azar (sin LLM)"}
+QUIEN = {"explotacion": "Greedy (explotación)", "exploracion": "Exploración al azar",
+         # solo en corridas anteriores a la separación de los sistemas, cuando este agente consultaba un LLM
+         "rl": "Agente LLM (corrida híbrida anterior)", "rl_invalida": "Greedy por respuesta inválida del LLM (híbrida)"}
 
 
 # -- recursos --------------------------------------------------------------------------------
@@ -209,37 +210,16 @@ def dijkstra_y_simulacion(evaluaciones):
     }
 
 
-def decisiones(historial, epsilon, registro_llm):
+def decisiones(historial, epsilon):
     conteo = {}
     for ep in historial:
         for d in ep.get("decisiones", []):
             conteo[d] = conteo.get(d, 0) + 1
-    control = {"BAJAR": 0, "PARAR": 0}
-    for ep in historial:
-        for t in ep.get("trayectoria", []):
-            if t.get("accion") in control:
-                control[t["accion"]] += 1
     total = sum(conteo.values())
-    del_llm = conteo.get("rl", 0) + conteo.get("rl_invalida", 0)
-    llm = None
-    if registro_llm is not None:
-        tiempos = [r["segundos"] for r in registro_llm if r["segundos"] is not None]
-        llm = {
-            "consultas": len(registro_llm),
-            "validas": sum(bool(r["valida"]) for r in registro_llm),
-            "invalidas": sum(not r["valida"] and not r["timeout"] for r in registro_llm),
-            "tiempos_agotados": sum(r["timeout"] for r in registro_llm),
-            "por_tipo": {t: sum(r["tipo"] == t for r in registro_llm) for t in sorted({r["tipo"] for r in registro_llm})},
-            "tiempo_total_s": round(sum(tiempos), 1) if tiempos else 0,
-            "tiempo_promedio_s": round(sum(tiempos) / len(tiempos), 1) if tiempos else None,
-            "tiempo_max_s": round(max(tiempos), 1) if tiempos else None,
-        }
     return {
         "total": total, "por_quien": {QUIEN.get(k, k): v for k, v in sorted(conteo.items())},
-        "greedy": conteo.get("explotacion", 0), "llm": conteo.get("rl", 0),
-        "llm_invalidas": conteo.get("rl_invalida", 0), "azar": conteo.get("exploracion", 0),
-        "llm_bajar": control["BAJAR"], "llm_parar": control["PARAR"], "epsilon": epsilon,
-        "fraccion_llm_observada": round(del_llm / total, 3) if total else None, "consultas_llm": llm,
+        "greedy": conteo.get("explotacion", 0), "azar": conteo.get("exploracion", 0), "epsilon": epsilon,
+        "fraccion_exploracion_observada": round(conteo.get("exploracion", 0) / total, 3) if total else None,
     }
 
 
@@ -248,7 +228,7 @@ def _nombre(ep):
     return nombre_malla(ep["malla"]) if ep.get("malla") else f"{ep['filas']}x{ep['columnas']}"
 
 
-def construir(parametros, fases, inicio, fin, historial, motivo_fin, c_best, registro_simulaciones, registro_llm,
+def construir(parametros, fases, inicio, fin, historial, motivo_fin, c_best, registro_simulaciones,
               registros, evaluaciones, recursos, monitor):
     """El reporte como diccionario (ver el docstring del módulo)."""
     duracion = (fin - inicio).total_seconds()
@@ -260,11 +240,11 @@ def construir(parametros, fases, inicio, fin, historial, motivo_fin, c_best, reg
             "modo": parametros.get("modo"), "epsilon": parametros.get("epsilon"),
             "bloques": parametros.get("bloques"), "max_episodios": parametros.get("max_episodios"),
             "paciencia": parametros.get("paciencia"), "procesos": parametros.get("procesos"),
-            "mapeador_procesos": parametros.get("mapeador_procesos"), "agente_llm": parametros.get("rl"),
+            "mapeador_procesos": parametros.get("mapeador_procesos"),
             "tipos": parametros.get("tipos"),
         },
         "episodios": _episodios(historial, motivo_fin, c_best),
-        "decisiones": decisiones(historial, parametros.get("epsilon"), registro_llm),
+        "decisiones": decisiones(historial, parametros.get("epsilon")),
         "dijkstra_y_simulacion": dijkstra_y_simulacion(evaluaciones),
         "simulaciones": {
             "en_esta_corrida": len(sims), "tiempo_total_s": _suma(s["segundos"] for s in sims),
@@ -390,11 +370,16 @@ def markdown(rep):
           f"{_n(e['C'], 4)} | {_n(e['recompensa'], 4)} | {'sí' if e['mejora'] else 'no'} | {e['fin']}"
           + (f" / {e['fin_tipos']}" if e.get("fin_tipos") else "") + " |" for e in ep["detalle"]]
     l += ["", "## Decisiones del agente", "",
-          f"{dec['total']} decisiones · fracción del LLM observada {_n(dec['fraccion_llm_observada'])} (epsilon = {dec['epsilon']})", "",
+          f"{dec['total']} decisiones · "
+          + (f"fracción de exploración observada {_n(dec['fraccion_exploracion_observada'])}"
+             if "fraccion_exploracion_observada" in dec else  # corridas híbridas anteriores (con LLM)
+             f"fracción del LLM observada {_n(dec.get('fraccion_llm_observada'))} (corrida híbrida)")
+          + f" (epsilon = {dec['epsilon']})", "",
           "| Quién decidió | Decisiones |", "|---|---|"]
     l += [f"| {k} | {v} |" for k, v in dec["por_quien"].items()]
-    l += [f"| Agente LLM: BAJAR de bloque | {dec['llm_bajar']} |", f"| Agente LLM: PARAR | {dec['llm_parar']} |"]
-    if dec["consultas_llm"]:
+    if "llm_bajar" in dec:  # corridas híbridas anteriores (con LLM)
+        l += [f"| Agente LLM: BAJAR de bloque | {dec['llm_bajar']} |", f"| Agente LLM: PARAR | {dec['llm_parar']} |"]
+    if dec.get("consultas_llm"):
         c = dec["consultas_llm"]
         l += ["", f"Consultas al LLM: {c['consultas']} ({c['validas']} válidas, {c['invalidas']} inválidas, "
                   f"{c['tiempos_agotados']} tiempos agotados) · tiempo total {_duracion(c['tiempo_total_s'])}, "

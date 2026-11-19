@@ -16,8 +16,8 @@ config/agente.json); cada vértice es un PE y cada arista la conexión con un ve
 sur, este u oeste. Peso de un PE = w_tipo · (1 + NOPs/ciclos), con w_tipo de los pesos
 w1-w4 de costos.json y NOPs y ciclos del reporte de ciclos. La malla se simula una vez;
 después el camino empieza en PE00 y elige el siguiente PE con una política epsilon-greedy
-(epsilon y semilla en config/agente.json): con probabilidad epsilon decide el agente RL (un LLM,
-Claude Code CLI por defecto, que elige entre los vecinos sin visitar) y si no, greedy: el vecino
+(epsilon y semilla en config/agente.json): con probabilidad epsilon explora (un vecino sin visitar
+al azar; este sistema no usa LLM) y si no, greedy: el vecino
 que deja el menor costo C del camino (P_fallo si el camino no cumple los tipos de PE).
 Termina cuando el camino cumple los tipos de PE y ningún vecino baja C, o cuando el PE actual no
 tiene vecinos sin visitar.
@@ -29,9 +29,8 @@ el de la malla completa).
 
 Ciclo de episodios (retroalimentación): se repiten episodios (semilla + n) hasta max_episodios o
 hasta paciencia episodios seguidos sin que baje el mejor C. Si un episodio baja el mejor C, pasa
-a ser el mejor; si no, se descarta. El agente RL recibe los últimos historial_llm episodios y el
-mejor, con su C real. Un rectángulo ya simulado no se vuelve a simular. En el punto de paro, con
-probabilidad epsilon el agente RL decide PARAR o SEGUIR n (hasta max_extension PEs más), para
+a ser el mejor; si no, se descarta. Un rectángulo ya simulado no se vuelve a simular. En el punto
+de paro, con probabilidad epsilon el azar decide parar o seguir n PEs más (hasta max_extension), para
 poder probar configuraciones más grandes que las que prefiere el estimado.
 
     python3 agente_greedy.py [--salida resultados/greedy]
@@ -67,7 +66,6 @@ from dijkstra.agente import Agente, Parametros, RUTA_PARAMETROS, medir_en_parale
 from dijkstra.compilar import ErrorCompilacion, preparar
 from dijkstra.contrato import RUTA_COSTOS, Costos
 from dijkstra.evaluador import Evaluacion, EvaluacionOperacion
-from dijkstra.rl_llm import EleccionLLM
 
 ARCHIVO_EVALUACION = "evaluacion_malla.json"
 ARCHIVO_EPISODIOS = "episodios.json"
@@ -202,9 +200,8 @@ def generar_reporte(salida, agente, medidor, fases, inicio_reloj, monitor):
     registros = tabla.construir(evaluaciones, episodios)
     fin = reporte_corrida.ahora()
     duracion = (fin - inicio_reloj).total_seconds()
-    registro_llm = getattr(agente.eleccion_rl, "registro", None)
     rep = reporte_corrida.construir(vars(agente.parametros), fases, inicio_reloj, fin, agente.historial,
-                                    agente.motivo_fin, agente.c_best, medidor.registro, registro_llm, registros,
+                                    agente.motivo_fin, agente.c_best, medidor.registro, registros,
                                     evaluaciones, reporte_corrida.uso_cpu(duracion), monitor.detener())
     reporte_corrida.escribir(salida, rep)
     mon = rep["recursos"]["monitor"]
@@ -282,8 +279,7 @@ def main(argv=None):
     medidor = MedidorConProgreso(lambda c: medir_en_paralelo(c, operaciones, CARPETA_PROGRAMAS, args.costos,
                                                              parametros.t_max_simulacion_s, parametros.procesos,
                                                              parametros.mapeador_procesos), args.latido)
-    agente = Agente(medidor, base, parametros, costos,
-                    eleccion_rl=EleccionLLM(**parametros.rl) if parametros.rl else None)
+    agente = Agente(medidor, base, parametros, costos)
     malla = agente.malla()
     configuracion = agente.configuracion(malla)
     ruta_evaluacion = args.salida / ARCHIVO_EVALUACION
@@ -304,7 +300,7 @@ def main(argv=None):
     print(f"Malla {len(malla)}x{len(malla[0])}: {evaluacion.estado}, C = {costo}")
 
     # Ciclo de episodios: cada uno recorre un camino, simula su rectángulo (salvo que ya esté
-    # simulado) y su C real vuelve al agente (C_best, paciencia e historial del agente RL).
+    # simulado) y su C real vuelve al agente (C_best, paciencia).
     ruta_cache = args.salida / ARCHIVO_CACHE_EPISODIOS
     if args.continuar:
         agente.cache_episodios = leer_cache_episodios(ruta_cache, huella)
@@ -355,7 +351,7 @@ def main(argv=None):
     _escribir_json(args.salida / ARCHIVO_EPISODIOS, {
         "modo": parametros.modo, "malla_referencia": [" ".join(f) for f in malla],
         "max_episodios": parametros.max_episodios, "paciencia": parametros.paciencia,
-        "historial_llm": parametros.historial_llm, "epsilon": parametros.epsilon,
+        "epsilon": parametros.epsilon,
         "C_malla": evaluacion.costo, "C_best": agente.c_best, "motivo_fin": agente.motivo_fin,
         "mejor": None if agente.mejor is None else agente.mejor["n"],
         "episodios": agente.historial,
@@ -378,8 +374,7 @@ def main(argv=None):
             "estado_episodio": episodio["estado"], "C_episodio": episodio["C"],
             "recompensa_episodio": episodio["recompensa"],
             "configuraciones_simuladas": len(agente.cache_episodios), "simulaciones_nuevas": medidor.simulaciones,
-            "elecciones_rl": sum(ep["decisiones"].count("rl") for ep in agente.historial),
-            "elecciones_rl_invalidas": sum(ep["decisiones"].count("rl_invalida") for ep in agente.historial),
+            "exploraciones": sum(ep["decisiones"].count("exploracion") for ep in agente.historial),
             "parametros_agente": vars(parametros), "tiempo_total_s": round(time.monotonic() - inicio, 1),
         })
         print(f"Ciclo: {len(agente.historial)} episodios (fin por {agente.motivo_fin}), "
@@ -411,8 +406,6 @@ def main(argv=None):
         "epsilon": resultado["epsilon"],
         "semilla": resultado["semilla"],
         "exploraciones": resultado["exploraciones"],
-        "elecciones_rl": resultado["rl"],
-        "elecciones_rl_invalidas": resultado["rl_invalidas"],
         "C_camino": resultado["valuacion"]["C"],
         "parada": resultado["parada"],
         "episodios": len(agente.historial),
@@ -428,8 +421,7 @@ def main(argv=None):
     })
     print(f"Camino epsilon-greedy (epsilon = {resultado['epsilon']}, semilla = {resultado['semilla']}) desde "
           f"{resultado['inicio']}: {resultado['pes']} PEs {resultado['por_tipo']}, "
-          f"{resultado['exploraciones']} exploraciones, {resultado['rl']} elecciones del agente RL "
-          f"({resultado['rl_invalidas']} inválidas, con greedy), peso total {resultado['peso_total']:.6g}; "
+          f"{resultado['exploraciones']} exploraciones, peso total {resultado['peso_total']:.6g}; "
           f"parada: {resultado['parada']}")
     v = resultado["valuacion"]
     print(f"Valuación del camino: C = {v['C']:.6f} (C_A = {v['C_A']:g}, C_L_norm = {v['C_L_norm']:.6g}, "

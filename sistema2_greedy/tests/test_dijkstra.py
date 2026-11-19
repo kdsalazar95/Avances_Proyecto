@@ -1,4 +1,4 @@
-"""Pruebas del bloque Dijkstra (dijkstra_greedy/dijkstra), el sustituto determinístico
+"""Pruebas del bloque Dijkstra (sistema2_greedy/dijkstra), el sustituto determinístico
 de los skills 04 a 07: adaptador del IR, mapeo, verificador y corrida en el
 simulador.
 
@@ -18,7 +18,7 @@ from unittest import mock
 
 _raiz_dg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(_raiz_dg), "cgra", "src"))  # simulador (cgra/src)
-sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (dijkstra_greedy/)
+sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (sistema2_greedy/)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cargador import Cargador

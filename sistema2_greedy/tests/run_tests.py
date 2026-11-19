@@ -1,9 +1,9 @@
 """
-Corre las pruebas de Dijkstra + Greedy (dijkstra_greedy/tests/) con la misma
+Corre las pruebas de Dijkstra + Greedy (sistema2_greedy/tests/) con la misma
 salida amigable que las del simulador (ResultadoAmigable de cgra/test/run_tests.py).
 
 Cómo correrlo, desde la raíz del repositorio:
-    python3 dijkstra_greedy/tests/run_tests.py
+    python3 sistema2_greedy/tests/run_tests.py
 """
 import importlib.util
 import os
@@ -12,7 +12,7 @@ import sys
 _aqui = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _aqui)
 
-import test_dijkstra  # noqa: E402  (también pone cgra/src y dijkstra_greedy/ en sys.path)
+import test_dijkstra  # noqa: E402  (también pone cgra/src y sistema2_greedy/ en sys.path)
 import test_agente  # noqa: E402
 import test_ciclo  # noqa: E402
 
@@ -30,14 +30,13 @@ NOMBRES_DE_SECCION = {
     "TestEvaluador": "Evaluador: costos de área, latencia y correctitud",
     "TestAgenteGreedy": "Agente Greedy: camino por los PEs de menor costo C",
     "TestEpisodio": "Episodio: rectángulo del camino, simulación y recompensa",
-    "TestCicloEpisodios": "Ciclo de episodios: retroalimentación con el C real, paciencia e historial",
-    "TestSeguirOParar": "Seguir o parar: el agente RL decide el tamaño en el punto de paro",
+    "TestCicloEpisodios": "Ciclo de episodios: retroalimentación con el C real y paciencia",
+    "TestSeguirOParar": "Seguir o parar: el azar decide el tamaño en el punto de paro",
     "TestPareto": "Frente de Pareto: rejilla, eficientes y dominadas (evaluador falso)",
     "TestModoBloques": "Modo bloques: descenso desde la malla de referencia por bloques",
     "TestResultados": "Resultados: reporte de ciclos completo y tabla de configuraciones",
     "TestReporteCorrida": "Reporte de la corrida: tiempos, decisiones, Dijkstra, configuraciones y recursos",
-    "TestEnlaceRL": "Enlace epsilon-greedy con el agente RL (LLM)",
-    "TestEleccionLLM": "Agente RL por CLI: prompt del paso y lectura de la respuesta",
+    "TestExploracion": "Epsilon-greedy sin LLM: Greedy o exploración al azar",
     "TestAgenteConEvaluador": "Agente Greedy con el evaluador real",
     "TestCompilarSkill02": "Skills 02-03 (clang, opt) dentro del ciclo",
     "TestSimuladorDijkstra": "Bloque Dijkstra: PE*.txt en el simulador",
@@ -64,8 +63,7 @@ def main():
         test_agente.TestModoBloques,
         test_agente.TestResultados,
         test_agente.TestReporteCorrida,
-        test_agente.TestEnlaceRL,
-        test_agente.TestEleccionLLM,
+        test_agente.TestExploracion,
         test_agente.TestAgenteConEvaluador,
         test_agente.TestCompilarSkill02,
         test_ciclo.TestCicloCompleto,

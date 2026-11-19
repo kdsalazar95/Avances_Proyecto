@@ -10,9 +10,8 @@ acciones son quitar ``b`` filas o ``b`` columnas interiores, del inicio o del fi
     FILAS INICIO · FILAS FIN · COLUMNAS INICIO · COLUMNAS FIN
 
 Greedy elige la acción de menor costo estimado (con los datos de la simulación de la referencia, sin
-simular) y, con probabilidad ``epsilon``, decide el agente RL (un LLM con el historial de costos
-reales; sin agente RL, el azar). El agente RL puede además responder ``BAJAR`` (pasar al bloque
-siguiente) o ``PARAR`` (terminar el descenso). La malla elegida **se simula**: si su costo real baja
+simular) y, con probabilidad ``epsilon``, se explora: se elige una acción al azar (sin LLM: este
+sistema no usa ninguno). La malla elegida **se simula**: si su costo real baja
 respecto a la malla actual, se acepta y el descenso sigue desde ella con el mismo bloque; si sube, se
 descarta (pág. 5 del PDF) y se prueba otra acción. Cuando ninguna acción del bloque mejora, se pasa al
 bloque siguiente; el descenso termina cuando ni el bloque más pequeño mejora.
@@ -21,9 +20,9 @@ Fase de tipos (``tipos: true`` en agente.json): al terminar el descenso, sobre l
 acciones son cambiar el tipo de **un PE del interior** de escalar a vectorial o al revés (E <-> V; los PEs
 de memoria de los bordes no se tocan), como el agente de la solución RL, que elige el tipo de cada PE del
 interior. Greedy elige el cambio de menor C estimado (el área cambia exactamente; la latencia se supone
-igual, así que el estimado favorece pasar de V a E) y, con probabilidad ``epsilon``, decide el agente RL,
-que también puede responder ``PARAR``. Cada malla propuesta se simula y se acepta si su C real baja; la
-fase termina cuando ningún cambio mejora la malla actual, con ``PARAR`` o al llegar a
+igual, así que el estimado favorece pasar de V a E) y, con probabilidad ``epsilon``, se elige un cambio
+al azar. Cada malla propuesta se simula y se acepta si su C real baja; la
+fase termina cuando ningún cambio mejora la malla actual o al llegar a
 ``max_cambios_tipo`` simulaciones. La malla resultante ya no es un rectángulo de la referencia: es una
 configuración con su propia distribución de tipos.
 
@@ -43,7 +42,6 @@ ACCIONES = ("FILAS INICIO", "FILAS FIN", "COLUMNAS INICIO", "COLUMNAS FIN")
 # que el rectángulo quede anclado en la esquina superior izquierda (PE00) al dibujarlo. La configuración
 # simulada es la misma con cualquiera de las dos.
 PREFERENCIA = ("FILAS FIN", "FILAS INICIO", "COLUMNAS FIN", "COLUMNAS INICIO")
-BAJAR, PARAR = "BAJAR", "PARAR"
 
 
 @dataclass(frozen=True)
@@ -195,22 +193,7 @@ def fase_tipos(agente, d, estado, malla, c_actual, azar, trayectoria, decisiones
         accion = min(orden, key=lambda x: (opciones[x][4], orden.index(x)))
         quien = "explotacion"
         if azar.random() < p.epsilon:
-            if agente.eleccion_rl is None:
-                accion, quien = azar.choice(orden), "exploracion"
-            else:
-                contexto = dict(agente.contexto_rl(), modo="tipos", malla_actual=[" ".join(r) for r in malla],
-                                C_actual=c_actual, trayectoria=list(trayectoria),
-                                opciones={x: {"pe": list(o[1]), "de": o[2], "a": o[3], "C_estimado": o[4]}
-                                          for x, o in opciones.items()})
-                respuesta = agente.eleccion_rl.decidir_tipo(contexto)
-                if respuesta in opciones:
-                    accion, quien = respuesta, "rl"
-                elif respuesta == PARAR:
-                    decisiones.append("rl")
-                    trayectoria.append({"accion": PARAR, "fase": "tipos", "bloque": None, "quien": "rl"})
-                    return malla, c_actual, "rl_parar"
-                else:
-                    quien = "rl_invalida"
+            accion, quien = azar.choice(orden), "exploracion"
         decisiones.append(quien)
         nueva, pe, de, a, estimado = opciones[accion]
         vistas.add(nueva)
@@ -261,28 +244,7 @@ def descender(agente, azar):
         accion = min(opciones, key=lambda a: (estimados[a], ACCIONES.index(a)))
         quien = "explotacion"
         if azar.random() < p.epsilon:
-            if agente.eleccion_rl is None:
-                accion, quien = azar.choice(sorted(opciones, key=ACCIONES.index)), "exploracion"
-            else:
-                contexto = dict(agente.contexto_rl(), modo="bloques", malla_actual=d.descripcion(estado),
-                                C_actual=c_actual, bloque=b, bloques=niveles, trayectoria=list(trayectoria),
-                                opciones={a: {"tamano": d.descripcion(e), "C_estimado": estimados[a]}
-                                          for a, e in opciones.items()})
-                respuesta = agente.eleccion_rl.decidir_bloque(contexto)
-                if respuesta in opciones:
-                    accion, quien = respuesta, "rl"
-                elif respuesta == BAJAR:
-                    decisiones.append("rl")
-                    trayectoria.append({"accion": BAJAR, "bloque": b, "quien": "rl"})
-                    i += 1
-                    continue
-                elif respuesta == PARAR:
-                    decisiones.append("rl")
-                    trayectoria.append({"accion": PARAR, "bloque": b, "quien": "rl"})
-                    parada = "rl_parar"
-                    break
-                else:
-                    quien = "rl_invalida"
+            accion, quien = azar.choice(sorted(opciones, key=ACCIONES.index)), "exploracion"
         decisiones.append(quien)
         nuevo = opciones[accion]
         conf = agente.configuracion(d.malla(nuevo))

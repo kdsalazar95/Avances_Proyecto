@@ -7,7 +7,7 @@ en español de cada prueba en vez de solo su nombre técnico.
 Cómo correrlo:
     uv run python3 cgra/test/run_tests.py
 
-Las pruebas de Dijkstra + Greedy están en dijkstra_greedy/tests/run_tests.py,
+Las pruebas de Dijkstra + Greedy están en sistema2_greedy/tests/run_tests.py,
 que reutiliza ResultadoAmigable y correr() de este archivo.
 """
 import io

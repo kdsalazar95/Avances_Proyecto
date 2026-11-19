@@ -1,6 +1,6 @@
 # Archivos `.ll` y `.dot`, y qué toma el bloque Dijkstra
 
-Referencia de los archivos que dejan los skills 02 y 03 en `cgra/programas/<operacion>/`, de lo que contiene cada uno y de cuáles usa el bloque Dijkstra (`dijkstra_greedy/dijkstra/`).
+Referencia de los archivos que dejan los skills 02 y 03 en `cgra/programas/<operacion>/`, de lo que contiene cada uno y de cuáles usa el bloque Dijkstra (`sistema2_greedy/dijkstra/`).
 
 ## Resumen
 
@@ -97,7 +97,7 @@ Por eso `ir_llvm.py` **ejecuta simbólicamente** `@<operacion>` del `.ll`. Los e
 | `operaciones.ll` | `programas/<operacion>/` (skill 02) | `@<operacion>` (el cálculo), `@inicializar_<operacion>` (la tabla de regiones) y las cadenas `@.str.N` | Armar el grafo desenrollado (skill 04) |
 | `memoria.bin` | `programas/<operacion>/` (skill 02) | Para el mapeo, **solo la tabla de símbolos**: nombre, filas y columnas de cada región | Saber qué región es cada arreglo y comprobar su tamaño |
 | Configuración de la CGRA | `cgra.json` + tamaño (`--filas`/`--columnas`), o un `.json` con tamaño fijo y `malla` | `filas`, `columnas`, `tipos_pe` con sus `instrucciones`, `malla` o `distribucion`, `ancho_vector` | Armar la malla, decidir qué PE ejecuta qué y agrupar en vectores de `ancho_vector` (skills 05–06) |
-| `compatibilidad.json` | `dijkstra_greedy/config/` | Operación del grafo → instrucción (`fadd` → `ADD`, `vload` → `VLD`…) y las instrucciones de transferencia (`SEND`/`RECV`, `VSEND`/`VRECV`) | Candidatos de cada operación y rutas |
+| `compatibilidad.json` | `sistema2_greedy/config/` | Operación del grafo → instrucción (`fadd` → `ADD`, `vload` → `VLD`…) y las instrucciones de transferencia (`SEND`/`RECV`, `VSEND`/`VRECV`) | Candidatos de cada operación y rutas |
 | Registros del ISA | `cgra/src/isa.py` | 5 escalares (`rA rB rC rT acc`) y 8 vectoriales (`v0`–`v7`) | Límite de valores vivos por PE y nombres en los `PE*.txt` |
 | Opciones | `Opciones` y `modo` | `reenvio_memoria`, `holgura`, `intentos_huecos`, `ventana`, `max_candidatos`, `escalar`/`vectorial`/`auto`/`mejor` | Ajustes del algoritmo |
 

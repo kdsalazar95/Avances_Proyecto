@@ -1,11 +1,10 @@
-"""Pruebas del agente Greedy (dijkstra_greedy/dijkstra/agente.py): camino sin ciclos por los PEs
+"""Pruebas del agente Greedy (sistema2_greedy/dijkstra/agente.py): camino sin ciclos por los PEs
 de una malla, siempre al vecino sin visitar que deja el menor costo C del camino (P_fallo si no
 cumple los tipos de PE), hasta que cumple los tipos y ningún vecino baja C."""
 
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,13 +13,11 @@ from unittest import mock
 
 _raiz_dg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(_raiz_dg), "cgra", "src"))  # simulador (cgra/src)
-sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (dijkstra_greedy/)
+sys.path.insert(0, _raiz_dg)  # Dijkstra + Greedy (sistema2_greedy/)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_raiz_dg, "herramientas"))  # gif_camino.py
 
-from dijkstra.agente import Agente, Parametros, PesoPE, medir_en_paralelo
-from dijkstra.rl_llm import (EleccionLLM, construir_prompt, construir_prompt_parada, interpretar,
-                             interpretar_parada)
+from dijkstra.agente import RUTA_PARAMETROS, Agente, Parametros, medir_en_paralelo
 from dijkstra.compilar import FUENTE, ErrorCompilacion, grafos, preparar
 from dijkstra.evaluador import RUTA_COSTOS, Evaluacion, EvaluacionOperacion, Evaluador
 from formato_cgra import RUTA_POR_DEFECTO
@@ -436,30 +433,6 @@ class TestCicloEpisodios(unittest.TestCase):
         self.assertEqual(agente.historia()["semilla"], agente.mejor["semilla"])
         json.dumps(historial, allow_nan=False)
 
-    def test_4_el_rl_recibe_el_historial_con_el_c_real(self):
-        """En cada paso RL, el contexto trae los últimos historial_llm episodios (con su C real) y el mejor."""
-        malla, nops = self.malla_y_nops()
-        vistos = []
-
-        def rl(actual, libres, pesos, camino, opciones, c_actual, contexto, parada=None):
-            if parada:
-                return 0
-            vistos.append((contexto["episodio"], [ep["n"] for ep in contexto["historial"]],
-                           None if contexto["mejor"] is None else contexto["mejor"]["n"], contexto["C_malla"]))
-            return libres[0]
-
-        agente = Agente(self.medidor(malla, nops, lambda c: 0.1 * c["filas"] * c["columnas"]), BASE,
-                        parametros(malla=[4, 5], epsilon=1.0, paciencia=50, max_episodios=5, historial_llm=2),
-                        eleccion_rl=rl)
-        agente.correr()
-        self.assertTrue(vistos)
-        for episodio, historial, mejor, c_malla in vistos:
-            self.assertEqual(historial, list(range(max(0, episodio - 2), episodio)))
-            self.assertEqual(c_malla, 5.0)
-            if episodio == 0:
-                self.assertIsNone(mejor)
-        self.assertEqual({e for e, *_ in vistos}, set(range(5)))
-
     def test_5_infraestructura_no_cuenta_para_la_paciencia(self):
         """Un fallo de infraestructura no tiene recompensa, no se guarda en la caché y no consume paciencia."""
         malla, nops = self.malla_y_nops()
@@ -504,133 +477,41 @@ class TestCicloEpisodios(unittest.TestCase):
                 gif_camino.main([str(corrida), "--salida", str(corrida / "c"), "--sin-episodios"])
             self.assertFalse((corrida / "c" / "curva_episodios.png").exists())
 
-    def test_6_prompt_con_el_historial(self):
-        """El prompt del LLM incluye los episodios anteriores con su C real y el mejor."""
-        ep = {"n": 0, "camino": ["PE00", "PE01", "PE11"], "malla": ["M E M", "M V M"], "filas": 2, "columnas": 3,
-              "estado": "correcta", "repetido": False, "C": 1.84, "C_estimado": 0.69, "recompensa": 3.16}
-        contexto = {"episodio": 1, "historial": [ep], "mejor": ep, "C_malla": 5.0}
-        args = TestEleccionLLM.ARGS[:6]
-        prompt = construir_prompt(*args, contexto)
-        self.assertIn("Episodio 1", prompt)
-        self.assertIn("ep 0: camino PE00→PE01→PE11; rectángulo M E M / M V M (2x3), correcta, C real 1.84 "
-                      "(estimado 0.69), R = 3.16", prompt)
-        self.assertIn("Mejor hasta ahora: ep 0", prompt)
-        self.assertIn("C de la malla completa: 5", prompt)
-        self.assertNotIn("Episodios anteriores", construir_prompt(*args))  # el primer episodio no trae historial
-        self.assertNotIn("Episodios anteriores", construir_prompt(*args, {"episodio": 0, "historial": [],
-                                                                           "mejor": None, "C_malla": 5.0}))
-
-
 class TestSeguirOParar(unittest.TestCase):
-    """En el punto de paro, con probabilidad epsilon, el agente RL decide PARAR o SEGUIR n PEs más:
-    así puede probar configuraciones más grandes que las que prefiere el estimado."""
+    """En el punto de paro, con probabilidad epsilon, el azar decide parar o seguir n PEs más: así se
+    pueden probar configuraciones más grandes que las que prefiere el estimado (sin LLM)."""
 
-    def agente(self, eleccion, **cambios):
+    def agente(self, **cambios):
         malla = Agente(None, BASE, parametros(malla=[4, 5])).malla()
         nops = {"op": nops_iguales(malla, 0)}
         datos = dict(malla=[4, 5], epsilon=1.0, max_extension=5)
         datos.update(cambios)
-        return Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(**datos), eleccion_rl=eleccion)
-
-    def rl_con(self, decisiones):
-        """Un agente RL que, en el punto de paro, responde las ``decisiones`` en orden (y luego 0), y
-        en los pasos normales elige como el greedy (el vecino de menor C)."""
-        pendientes, llamadas = list(decisiones), []
-
-        def rl(actual, libres, pesos, camino, opciones, c_actual, contexto, parada=None):
-            if parada:
-                llamadas.append((list(camino), contexto.get("rectangulo"), parada))
-                return pendientes.pop(0) if pendientes else 0
-            return min(libres, key=lambda v: (opciones[v]["C"], libres.index(v)))
-        rl.llamadas = llamadas
-        return rl
-
-    def test_1_seguir_n_agrega_n_pes(self):
-        """PARAR deja el camino del greedy; SEGUIR 3 agrega exactamente 3 PEs más y luego se revisa el
-        paro otra vez (ahí el RL dice PARAR)."""
-        base = self.agente(self.rl_con([0]))
-        camino_base = base.buscar()
-        self.assertEqual([(x["decision"], x["n"]) for x in base.extensiones], [("rl", 0)])
-        rl = self.rl_con([3, 0])
-        agente = self.agente(rl)
-        camino = agente.buscar()
-        self.assertEqual(camino[:len(camino_base)], camino_base)
-        self.assertEqual(len(camino), len(camino_base) + 3)
-        self.assertEqual([(x["decision"], x["n"], x["pes"]) for x in agente.extensiones],
-                         [("rl", 3, len(camino_base)), ("rl", 0, len(camino_base) + 3)])
-        self.assertEqual(agente.parada, "sin_mejora")
-        # el RL ve el rectángulo que se simularía si para ahora y el máximo permitido
-        camino_visto, rectangulo, maximo = rl.llamadas[0]
-        self.assertEqual(camino_visto, camino_base)
-        self.assertEqual(rectangulo, [" ".join(f) for f in agente.malla_episodio(camino_base)])
-        self.assertEqual(maximo, 5)
-
-    def test_2_fuera_de_rango_es_parar(self):
-        """Una respuesta fuera de 0..max_extension (o que no es un entero) cuenta como rl_invalida: para."""
-        for respuesta in (6, -1, "PE01", True, None):
-            agente = self.agente(lambda *a, parada=None, r=respuesta: r if parada else a[1][0])
-            agente.buscar()
-            self.assertEqual([(x["decision"], x["n"]) for x in agente.extensiones], [("rl_invalida", 0)], respuesta)
+        return Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(**datos))
 
     def test_3_max_extension_0_y_epsilon_0_siempre_paran(self):
-        rl = self.rl_con([5])
-        agente = self.agente(rl, max_extension=0)
-        agente.buscar()
-        self.assertEqual((agente.extensiones, rl.llamadas), ([], []))
-        rl = self.rl_con([5])
-        agente = self.agente(rl, epsilon=0.0)
-        agente.buscar()
-        self.assertEqual((agente.extensiones, rl.llamadas), ([], []))
+        for cambios in ({"max_extension": 0}, {"epsilon": 0.0}):
+            agente = self.agente(**cambios)
+            agente.buscar()
+            self.assertEqual(agente.extensiones, [], cambios)
 
-    def test_4_sin_rl_el_azar_decide(self):
-        """Sin agente RL, el azar elige de 0 a max_extension (exploracion), con la semilla."""
-        agente = self.agente(None, semilla=4)
+    def test_4_el_azar_decide(self):
+        """El azar elige de 0 a max_extension (exploracion), con la semilla."""
+        agente = self.agente(semilla=4)
         camino = agente.buscar()
         self.assertTrue(agente.extensiones)
         self.assertEqual({x["decision"] for x in agente.extensiones}, {"exploracion"})
         self.assertTrue(all(0 <= x["n"] <= 5 for x in agente.extensiones))
-        self.assertEqual(camino, self.agente(None, semilla=4).buscar())
+        self.assertEqual(camino, self.agente(semilla=4).buscar())
 
     def test_5_el_episodio_guarda_la_extension(self):
-        """El episodio (y el historial que ve el RL) dice cuántos PEs siguió tras el punto de paro."""
-        agente = self.agente(self.rl_con([2, 0]), max_episodios=1)
+        """El episodio dice cuántos PEs siguió tras el punto de paro."""
+        agente = self.agente(semilla=4, max_episodios=1)
         agente.correr()
         ep = agente.historial[0]
-        self.assertEqual(ep["extension"], 2)
-        self.assertEqual([x["n"] for x in ep["extensiones"]], [2, 0])
+        self.assertTrue(ep["extensiones"])
+        self.assertEqual(ep["extension"], sum(x["n"] for x in ep["extensiones"]))
         self.assertEqual(agente.resultado()["extensiones"], ep["extensiones"])
         self.assertEqual(agente.historia()["extensiones"], ep["extensiones"])
-
-    def test_6_prompt_y_lectura_de_parar_o_seguir(self):
-        """El prompt del punto de paro pide PARAR o SEGUIR n; solo se aceptan esas respuestas exactas."""
-        contexto = {"episodio": 1, "historial": [], "mejor": None, "C_malla": 29.6,
-                    "rectangulo": ["M E M", "M V M"]}
-        prompt = construir_prompt_parada("PE11", ["PE00", "PE01", "PE11"], 0.687, contexto, 10)
-        self.assertIn("PARAR", prompt)
-        self.assertIn("SEGUIR n", prompt)
-        self.assertIn("entre 1 y 10", prompt)
-        self.assertIn("rectángulo M E M / M V M (2x3)", prompt)
-        self.assertIn("C estimado es 0.687", prompt)
-        for respuesta, esperado in (("PARAR", 0), ("parar\n", 0), ("`PARAR`", 0), ("PARAR.", 0),
-                                    ("SEGUIR 3", 3), ("seguir 10", 10), (" `SEGUIR 1`. ", 1)):
-            self.assertEqual(interpretar_parada(respuesta, 10), esperado, respuesta)
-        for respuesta in ("SEGUIR 11", "SEGUIR 0", "SEGUIR", "SEGUIR -2", "Creo que SEGUIR 3", "PARAR o SEGUIR 2",
-                          "PE01", "", None, "SEGUIR 3 PEs"):
-            self.assertIsNone(interpretar_parada(respuesta, 10), respuesta)
-
-    def test_7_el_llm_por_cli_en_el_punto_de_paro(self):
-        """EleccionLLM con ``parada`` usa el prompt del punto de paro y lee PARAR / SEGUIR n."""
-        eleccion = EleccionLLM(["claude", "-p", "{prompt}"])
-        args = TestEleccionLLM.ARGS[:6] + ({"episodio": 0, "historial": [], "mejor": None, "C_malla": 29.6,
-                                             "rectangulo": ["M E M", "M V M"]},)
-        with mock.patch("dijkstra.rl_llm.subprocess.run",
-                        return_value=subprocess.CompletedProcess([], 0, stdout="SEGUIR 4\n", stderr="")) as run:
-            self.assertEqual(eleccion(*args, parada=10), 4)
-        self.assertIn("PARAR", run.call_args.args[0][2])
-        with mock.patch("dijkstra.rl_llm.subprocess.run",
-                        return_value=subprocess.CompletedProcess([], 0, stdout="PE01", stderr="")):
-            self.assertIsNone(eleccion(*args, parada=10))
-
 
 class TestPareto(unittest.TestCase):
     """herramientas/pareto.py: rejilla de rectángulos, frente de Pareto área-latencia y gráfica, con un
@@ -732,10 +613,10 @@ class TestModoBloques(unittest.TestCase):
         medir.llamadas = llamadas
         return medir
 
-    def agente(self, eleccion=None, **cambios):
+    def agente(self, **cambios):
         datos = dict(malla=self.MALLA, modo="bloques", bloques=[4, 2, 1], max_episodios=3, paciencia=2)
         datos.update(cambios)
-        return Agente(self.medidor(), BASE, parametros(**datos), eleccion_rl=eleccion)
+        return Agente(self.medidor(), BASE, parametros(**datos))
 
     def test_1_rectangulos(self):
         from dijkstra.bloques import Descenso, Estado
@@ -787,56 +668,6 @@ class TestModoBloques(unittest.TestCase):
         self.assertEqual([ep["nuevas"] for ep in a.historial[1:]], [0, 0])
         self.assertTrue(a.historial[0]["mejora"])
         self.assertTrue(a.historial[1]["repetido"])
-
-    def test_4_el_agente_rl_decide_la_accion(self):
-        """El LLM puede elegir otra acción, BAJAR de bloque o PARAR; una respuesta inválida usa Greedy."""
-        class RL:
-            def __init__(self, respuestas):
-                self.respuestas, self.contextos = list(respuestas), []
-
-            def decidir_bloque(self, contexto):
-                self.contextos.append(contexto)
-                return self.respuestas.pop(0) if self.respuestas else None
-
-        rl = RL(["COLUMNAS FIN"])
-        a = self.agente(rl, epsilon=1.0, max_episodios=1)
-        a.correr()
-        t = a.historial[0]["trayectoria"][1]
-        self.assertEqual((t["accion"], t["quien"]), ("COLUMNAS FIN", "rl"))
-        ctx = rl.contextos[0]
-        self.assertEqual((ctx["modo"], ctx["bloque"], ctx["malla_actual"]), ("bloques", 4, "8x10"))
-        # quitar 4 filas (par) del inicio o del final, o columnas de cualquier lado, da la misma malla: se
-        # ofrece una sola, la de FIN (el rectángulo queda anclado en PE00)
-        self.assertIn("FILAS FIN", ctx["opciones"])
-        self.assertNotIn("FILAS INICIO", ctx["opciones"])
-        self.assertNotIn("COLUMNAS INICIO", ctx["opciones"])
-        self.assertEqual(ctx["trayectoria"][0]["accion"], "inicio")
-        self.assertTrue(all(d == "rl_invalida" for d in a.historial[0]["decisiones"][1:]))  # luego None
-
-        a = self.agente(RL(["PARAR"]), epsilon=1.0, max_episodios=1)
-        a.correr()
-        self.assertEqual(a.historial[0]["parada"], "rl_parar")
-        self.assertEqual((a.historial[0]["filas"], a.historial[0]["columnas"]), (8, 10))
-
-        a = self.agente(RL(["BAJAR", "BAJAR", "PARAR"]), epsilon=1.0, max_episodios=1)
-        a.correr()
-        self.assertEqual([t["accion"] for t in a.historial[0]["trayectoria"][1:]], ["BAJAR", "BAJAR", "PARAR"])
-
-    def test_5_prompt_y_lectura(self):
-        from dijkstra.rl_llm import construir_prompt_bloques, interpretar_bloque
-        contexto = {"episodio": 0, "historial": [], "mejor": None, "C_malla": 29.6, "malla_actual": "16x32",
-                    "C_actual": 14.8, "bloque": 16, "bloques": [16, 8, 4, 2, 1],
-                    "trayectoria": [{"accion": "inicio", "filas": 32, "columnas": 32, "C": 29.6}],
-                    "opciones": {"COLUMNAS INICIO": {"tamano": "16x16", "C_estimado": 7.3}}}
-        prompt = construir_prompt_bloques(contexto)
-        for texto in ("16x32", "C real 14.8", "Bloque actual: 16", "COLUMNAS INICIO: queda 16x16", "BAJAR", "PARAR"):
-            self.assertIn(texto, prompt)
-        opciones = {"FILAS FIN": None, "COLUMNAS INICIO": None}
-        for respuesta, esperado in (("FILAS FIN", "FILAS FIN"), ("filas  fin\n", "FILAS FIN"),
-                                    ("`COLUMNAS INICIO`.", "COLUMNAS INICIO"), ("BAJAR", "BAJAR"), ("parar", "PARAR")):
-            self.assertEqual(interpretar_bloque(respuesta, opciones), esperado)
-        for respuesta in ("FILAS INICIO", "quito FILAS FIN", "FILAS", "", None, "SEGUIR 3"):
-            self.assertIsNone(interpretar_bloque(respuesta, opciones), respuesta)
 
     def test_6_curvas_gif_y_pareto_de_la_exploracion(self):
         """gif_camino dibuja curva_exploracion.png y exploracion.gif (un cuadro por malla probada) y
@@ -907,31 +738,6 @@ class TestModoBloques(unittest.TestCase):
         self.assertEqual(len({tuple(t["malla"]) for t in tipos}), len(tipos))
         json.dumps(a.historial, allow_nan=False)
 
-        # el agente RL puede elegir el cambio o PARAR la fase
-        class RL:
-            def __init__(self, respuestas):
-                self.respuestas, self.contextos = list(respuestas), []
-
-            def decidir_bloque(self, contexto):
-                return "PARAR"
-
-            def decidir_tipo(self, contexto):
-                self.contextos.append(contexto)
-                return self.respuestas.pop(0) if self.respuestas else "PARAR"
-
-        otra = "CAMBIAR 0 1"  # el descenso para de inmediato (PARAR): la fase empieza en la referencia
-        rl = RL([otra])
-        b = self.agente(rl, epsilon=1.0, max_episodios=1, tipos=True)
-        b.correr()
-        ep = b.historial[0]
-        ctx = rl.contextos[0]
-        self.assertEqual(ctx["modo"], "tipos")
-        self.assertIn(otra, ctx["opciones"])
-        t = [t for t in ep["trayectoria"] if t.get("fase") == "tipos"]
-        self.assertEqual((t[0]["accion"], t[0]["quien"]), (otra, "rl"))
-        self.assertEqual(t[-1]["accion"], "PARAR")
-        self.assertEqual(ep["parada_tipos"], "rl_parar")
-
         # el GIF dibuja los tipos cambiados de la malla
         import gif_camino
         # rectángulos anclados en PE00: solo cuentan el tamaño y la paridad de la fila inicial
@@ -952,14 +758,6 @@ class TestModoBloques(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(gif_camino.gif_exploracion(datos, Path(tmp) / "e.gif"), len(cuadros) + 1)
 
-        # el prompt y la lectura de la respuesta
-        from dijkstra.rl_llm import construir_prompt_tipos, interpretar_tipo
-        prompt = construir_prompt_tipos(ctx)
-        for texto in ("escalar (E) o vectorial (V)", "fila 0:", otra, "PARAR"):
-            self.assertIn(texto, prompt)
-        self.assertEqual(interpretar_tipo(f" `{otra.lower()}`.", ctx["opciones"]), otra)
-        self.assertIsNone(interpretar_tipo("CAMBIAR 99 99", ctx["opciones"]))
-        self.assertIsNone(interpretar_tipo("FILAS FIN", ctx["opciones"]))
 
 
 class TestResultados(unittest.TestCase):
@@ -1069,19 +867,18 @@ class TestReporteCorrida(unittest.TestCase):
                 o.mapeo = {"operaciones": 10, "transferencias": 3}
         registros = tabla.construir(evaluaciones, a.historial)
         inicio = reporte_corrida.ahora()
-        llm = [{"tipo": "bloque", "segundos": 4.0, "timeout": False, "valida": True, "respuesta": "FILAS FIN"},
-               {"tipo": "bloque", "segundos": None, "timeout": True, "valida": False, "respuesta": None}]
         monitor = reporte_corrida.MonitorRecursos(intervalo=0.05).iniciar()
         rep = reporte_corrida.construir(vars(a.parametros), {"exploración": 12.0}, inicio, inicio + timedelta(seconds=90),
                                         a.historial, a.motivo_fin, a.c_best,
                                         [{"configuracion": "4x10", "pes": 40, "estado": "correcta", "C": 2.6, "segundos": 7.0}],
-                                        llm, registros, evaluaciones, reporte_corrida.uso_cpu(90.0), monitor.detener())
+                                        registros, evaluaciones, reporte_corrida.uso_cpu(90.0), monitor.detener())
         self.assertEqual(rep["general"]["duracion_s"], 90.0)
         self.assertEqual(rep["episodios"]["total"], len(a.historial))
         d = rep["decisiones"]
         self.assertEqual(d["total"], sum(len(ep["decisiones"]) for ep in a.historial))
-        self.assertEqual(d["greedy"] + d["llm"] + d["llm_invalidas"] + d["azar"], d["total"])
-        self.assertEqual((d["consultas_llm"]["consultas"], d["consultas_llm"]["tiempos_agotados"]), (2, 1))
+        self.assertEqual(d["greedy"] + d["azar"], d["total"])
+        self.assertNotIn("consultas_llm", d)
+        self.assertNotIn("Agente LLM", reporte_corrida.markdown(rep))
         c = rep["configuraciones"]
         self.assertEqual(c["evaluadas"], len(registros))
         self.assertLessEqual(c["menor_costo"]["C"], c["mayor_costo"]["C"])
@@ -1100,123 +897,39 @@ class TestReporteCorrida(unittest.TestCase):
             json.loads((Path(tmp) / "reporte_corrida.json").read_text())
 
 
-class TestEnlaceRL(unittest.TestCase):
-    """Con epsilon, el agente RL decide el paso (en lugar de la exploración al azar); el resto, Dijkstra greedy."""
+class TestExploracion(unittest.TestCase):
+    """Con probabilidad epsilon el paso es una exploración al azar; si no, Greedy. Sin LLM."""
 
-    def agente(self, eleccion, **cambios):
+    def agente(self, **cambios):
         malla = Agente(None, BASE, parametros(malla=[5, 6])).malla()
         nops = {"op": {pe: (i * 7) % 5 for i, pe in enumerate(Malla(5, 6).ids())}}
-        return Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(malla=[5, 6], **cambios),
-                      eleccion_rl=eleccion)
+        return Agente(lambda c: evaluacion_falsa(malla, nops), BASE, parametros(malla=[5, 6], **cambios))
 
-    def test_1_rl_decide_con_probabilidad_epsilon(self):
-        """Con epsilon 0.5 hay pasos del RL y pasos de Dijkstra greedy, y el RL decide lo que devolvió."""
-        llamadas = []
-
-        def rl(actual, libres, pesos, camino, opciones, c_actual, contexto, parada=None):
-            if parada:
-                return 0  # en el punto de paro: parar
-            self.assertEqual(set(opciones), set(libres))  # el C de cada vecino libre
-            elegido = libres[-1]
-            llamadas.append((actual, list(libres), elegido))
-            return elegido
-
-        agente = self.agente(rl, epsilon=0.5, semilla=3)
+    def test_1_epsilon_mezcla_greedy_y_azar(self):
+        agente = self.agente(epsilon=0.5, semilla=0)
         camino = agente.buscar()
-        self.assertEqual(set(agente.decisiones[1:]), {"rl", "explotacion"})
-        pasos_rl = [i for i, d in enumerate(agente.decisiones) if d == "rl"]
-        self.assertEqual(len(llamadas), len(pasos_rl))
-        for paso, (actual, libres, elegido) in zip(pasos_rl, llamadas):
-            self.assertEqual(camino[paso], elegido)
-            self.assertEqual(camino[paso - 1], actual)
-            self.assertIn(elegido, libres)
-        self.assertEqual(agente.resultado()["rl"], len(pasos_rl))
+        self.assertEqual(set(agente.decisiones[1:]), {"exploracion", "explotacion"})
+        self.assertEqual(agente.resultado()["exploraciones"], agente.decisiones.count("exploracion"))
+        self.assertEqual(camino, self.agente(epsilon=0.5, semilla=0).buscar())  # misma semilla, mismo camino
 
-    def test_2_con_epsilon_0_no_se_llama_al_rl(self):
-        """Epsilon 0 es Greedy puro: el agente RL nunca se consulta."""
-        def rl(*args):
-            raise AssertionError("el agente RL no debía consultarse")
-
-        agente = self.agente(rl, epsilon=0.0)
+    def test_2_con_epsilon_0_es_greedy_puro(self):
+        agente = self.agente(epsilon=0.0)
         agente.buscar()
         self.assertEqual(set(agente.decisiones[1:]), {"explotacion"})
         self.assertEqual(agente.extensiones, [])  # ni en el punto de paro
 
-    def test_3_respuesta_invalida_cae_a_greedy(self):
-        """Si el RL no devuelve un vecino libre, ese paso es Dijkstra greedy. Con epsilon 1 y un RL que
-        siempre falla, el camino es el mismo que el de Greedy puro."""
-        agente = self.agente(lambda *args, **kw: None, epsilon=1.0)
-        camino = agente.buscar()
-        self.assertEqual(set(agente.decisiones[1:]), {"rl_invalida"})
-        # en el punto de paro, la respuesta inválida es parar
-        self.assertEqual([(x["decision"], x["n"]) for x in agente.extensiones], [("rl_invalida", 0)])
-        self.assertEqual(agente.resultado()["rl_invalidas"], len(camino) - 1)
-        self.assertEqual(camino, self.agente(None, epsilon=0.0).buscar())
-
-    def test_4_sin_rl_la_rama_es_exploracion(self):
-        """Sin agente RL, la rama de epsilon sigue siendo la exploración al azar."""
-        agente = self.agente(None, epsilon=1.0)
+    def test_3_con_epsilon_1_todo_es_exploracion(self):
+        agente = self.agente(epsilon=1.0)
         agente.buscar()
         self.assertEqual(set(agente.decisiones[1:]), {"exploracion"})
 
-
-class TestEleccionLLM(unittest.TestCase):
-    """El adaptador del agente RL (un LLM por CLI): arma el prompt del paso y lee el PE de la respuesta."""
-
-    LIBRES = ["PE01", "PE10"]
-    PESOS = {"PE01": PesoPE("PE01", "E", 1, 0, 1, 1.0), "PE10": PesoPE("PE10", "M", 12, 0, 1, 12.0)}
-    OPCIONES = {"PE01": {"C": 0.6881, "cumple_tipos": False}, "PE10": {"C": 0.8512, "cumple_tipos": True}}
-    ARGS = ("PE00", LIBRES, PESOS, ["PE00"], OPCIONES, 10.0)
-
-    def test_1_prompt_con_los_vecinos_libres(self):
-        """El prompt pide minimizar C y da, por vecino, su tipo, su área w_tipo y el C del camino con él;
-        ya no habla de "peso"."""
-        prompt = construir_prompt(*self.ARGS)
-        self.assertIn("PE01", prompt)
-        self.assertIn("PE10", prompt)
-        self.assertIn("Responde solo", prompt)
-        self.assertIn("PE00", prompt)
-        self.assertIn("minimizar el costo C", prompt)
-        self.assertIn("C del camino si se agrega 0.6881 (no cumple los tipos de PE)", prompt)
-        self.assertIn("área w_tipo 12, C del camino si se agrega 0.8512 (cumple los tipos de PE)", prompt)
-        self.assertIn("su C es 10", prompt)
-        self.assertNotIn("peso", prompt.lower())
-
-    def test_2_solo_acepta_el_identificador(self):
-        """La respuesta vale solo si es exactamente el identificador de un vecino libre (se toleran
-        espacios, comillas invertidas y un punto final). Con más texto no se adivina: es None (el paso
-        cae a greedy como rl_invalida); así "descarto PE10, elijo PE01" no se toma como PE10."""
-        for respuesta in ("PE01", "PE01\n", "  PE01  ", "PE01.", "`PE01`", "``PE01``\n"):
-            self.assertEqual(interpretar(respuesta, self.LIBRES), "PE01", respuesta)
-        for respuesta in ("descarto PE10, elijo PE01", "Elijo PE01.", "PE00 ya está visitado; PE10",
-                          "PE01 PE10", "PE01, PE10", "no sé", "", None, "PE99", "PE00", "PE011", "pe01"):
-            self.assertIsNone(interpretar(respuesta, self.LIBRES), respuesta)
-
-    def test_3_ejecuta_el_comando_con_el_prompt(self):
-        eleccion = EleccionLLM(["claude", "-p", "{prompt}"])
-        with mock.patch("dijkstra.rl_llm.subprocess.run",
-                        return_value=subprocess.CompletedProcess([], 0, stdout="PE10\n", stderr="")) as run:
-            elegido = eleccion(*self.ARGS)
-        self.assertEqual(elegido, "PE10")
-        argumentos = run.call_args.args[0]
-        self.assertEqual(argumentos[:2], ["claude", "-p"])
-        self.assertIn("PE01", argumentos[2])
-        self.assertNotIn("{prompt}", argumentos)
-
-    def test_4_fallas_del_comando(self):
-        """Sin el comando o con código de salida distinto de 0 falla; el tiempo agotado es una respuesta vacía."""
-        eleccion = EleccionLLM(["claude", "-p", "{prompt}"])
-        with mock.patch("dijkstra.rl_llm.subprocess.run", side_effect=FileNotFoundError()):
-            with self.assertRaisesRegex(RuntimeError, "no se encontró"):
-                eleccion(*self.ARGS)
-        with mock.patch("dijkstra.rl_llm.subprocess.run",
-                        return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="no autenticado")):
-            with self.assertRaisesRegex(RuntimeError, "no autenticado"):
-                eleccion(*self.ARGS)
-        with mock.patch("dijkstra.rl_llm.subprocess.run", side_effect=subprocess.TimeoutExpired("x", 1)):
-            self.assertIsNone(eleccion(*self.ARGS))
-        with self.assertRaisesRegex(ValueError, "{prompt}"):
-            EleccionLLM(["claude", "-p"])
+    def test_4_el_agente_no_tiene_llm(self):
+        """El Sistema 2 no usa LLM: no hay módulo ni parámetros de un agente LLM."""
+        import importlib.util
+        self.assertIsNone(importlib.util.find_spec("dijkstra.rl_llm"))
+        for campo in ("rl", "historial_llm"):
+            self.assertNotIn(campo, Parametros.__dataclass_fields__)
+        self.assertNotIn("rl", json.loads(RUTA_PARAMETROS.read_text(encoding="utf-8")))
 
 
 class TestAgenteConEvaluador(_ConOperaciones):
