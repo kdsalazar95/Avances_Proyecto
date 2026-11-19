@@ -94,10 +94,14 @@ def compilar_con_skills(compilador, carpeta_eval, instancia, n_corr):
 
 
 def evaluar(dir_candidata, id_evaluacion, instancia, corrida, normalizadores, mejor_costo_anterior, carpeta_eval,
-            compilador):
+            compilador, es_referencia=None):
+    """``normalizadores=None``: se miden en esta evaluación (la referencia). ``es_referencia``: por
+    defecto, lo mismo; con normalizadores fijos (``normalizadores`` en corrida.json) la referencia se
+    evalúa con ellos y ``es_referencia=True`` solo marca que su recompensa es 0 (C_best_0 = C_ref)."""
     inicio = time.monotonic()
     p_fallo = corrida["penalizacion"]["P_fallo"]
-    es_referencia = normalizadores is None
+    medir_normalizadores = normalizadores is None
+    es_referencia = medir_normalizadores if es_referencia is None else es_referencia
     accion = accion_de(id_evaluacion, dir_candidata)
     errores, avisos, programas = [], [], None
 
@@ -154,7 +158,7 @@ def evaluar(dir_candidata, id_evaluacion, instancia, corrida, normalizadores, me
     # E06: métricas y costo.
     ruta_cgra = Path(carpeta_eval) / ARCHIVO_CONFIG
     normalizadores_ = normalizadores
-    if es_referencia:
+    if medir_normalizadores:
         c_a_ref, _ = metricas.costo_area_json(ruta_cgra, corrida["pesos_area"])
         normalizadores_ = {"C_A_ref": c_a_ref, "C_L_ref": metricas.costo_latencia(
             e04["ciclos"], e04["nops"], corrida["formula_latencia"], metricas.numero_pes(ruta_cgra)),

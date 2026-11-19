@@ -4,7 +4,9 @@
     ├── corrida.json        parámetros congelados de la corrida
     ├── contexto.json       A01
     ├── instancia/          memoria.bin, esperado.json (privado del evaluador), instancia.json
-    ├── normalizacion.json  C_A,ref y C_L,ref medidos en la referencia
+    ├── normalizacion.json  C_A,ref y C_L,ref: los fijos de corrida.json ("normalizadores") o los
+    │                       medidos en la referencia
+    ├── convergencia.csv/.json  costo y tiempo de cada evaluación y el resumen de convergencia
     ├── candidatas/<id>/    acciones del agente: cgra.json + candidata.json (solo lectura)
     ├── eval/<id>/          evaluación aislada: skills/intento-k/ (Skills 01–09), PE*.txt,
     │                       reporte_ciclos.txt, memoria final y reporte.json
@@ -25,7 +27,7 @@ from pathlib import Path
 
 from .. import estados
 from ..comun import ARCHIVO_CONFIG, ahora, escribir_json, leer_json, relativa
-from ..corrida import cargar_corrida, es_conjunto, resolver
+from ..corrida import ErrorCorrida, cargar_corrida, es_conjunto, normalizadores_fijos, resolver, validar_corrida
 from ..entorno.contexto import cargar_contexto, cargar_contexto_conjunto
 from ..entorno.validacion_accion import validar_accion
 from ..evaluador import reporte as e08
@@ -60,9 +62,20 @@ def _malla(directorio):
         return None
 
 
-def iniciar(ruta_config, carpeta_corridas):
-    """Crea la corrida, prepara la instancia, evalúa la referencia y devuelve el ``Ciclo``."""
+def iniciar(ruta_config, carpeta_corridas, cambios=None, referencia_de=None):
+    """Crea la corrida, prepara la instancia, evalúa la referencia y devuelve el ``Ciclo``.
+
+    ``cambios``: valores que reemplazan los de la configuración (p. ej. ``id`` y ``epsilon`` en un barrido).
+    ``referencia_de``: carpeta de otra corrida con la misma referencia y los mismos normalizadores; su
+    evaluación de la referencia se reusa en lugar de repetirla (la 32x32 con los Skills es lo más caro).
+    """
     corrida = cargar_corrida(ruta_config)
+    if cambios:
+        corrida.update(cambios)
+        errores = validar_corrida(corrida)
+        if errores:
+            raise ErrorCorrida("; ".join(errores))
+    fijos = normalizadores_fijos(corrida)
     carpeta = Path(carpeta_corridas) / corrida["id"]
     if carpeta.exists():
         raise ErrorCiclo(f"La corrida {carpeta} ya existe; use 'reanudar' o cambie el id")
@@ -80,6 +93,8 @@ def iniciar(ruta_config, carpeta_corridas):
         instancia = preparar_instancia(resolver(corrida["fuente_c"]), corrida["operacion"], carpeta / "instancia")
         contexto = cargar_contexto(corrida, instancia)
     escribir_json(carpeta / "contexto.json", contexto)
+    if fijos:
+        escribir_json(carpeta / "normalizacion.json", fijos)
 
     # La referencia es una configuración (cgra.json); pasa por el mismo evaluador (Skills 01–09 + simulador).
     destino = carpeta / "candidatas" / ID_REFERENCIA
@@ -94,7 +109,7 @@ def iniciar(ruta_config, carpeta_corridas):
     _solo_lectura(destino)
 
     ciclo = Ciclo(carpeta)
-    reporte = ciclo.evaluar_referencia()
+    reporte = ciclo.reusar_referencia(referencia_de) if referencia_de else ciclo.evaluar_referencia()
     if reporte["estado_evaluacion"] != estados.CORRECTA:
         ciclo.escribir_resumen("detenida: referencia no válida")
         raise ErrorCiclo(f"La referencia no es correcta ({reporte['estado_evaluacion']}): "
@@ -127,10 +142,38 @@ class Ciclo:
         if self.memoria.por_id(ID_REFERENCIA):
             raise ErrorCiclo("la referencia ya fue evaluada en esta corrida")
         directorio = self.carpeta / "candidatas" / ID_REFERENCIA
-        reporte = self._evaluar(directorio, ID_REFERENCIA, normalizadores=None, mejor_anterior=None)
-        if reporte["estado_evaluacion"] == estados.CORRECTA:
+        fijos = bool(self.normalizadores and self.normalizadores.get("fijos"))
+        reporte = self._evaluar(directorio, ID_REFERENCIA, normalizadores=self.normalizadores if fijos else None,
+                                mejor_anterior=None, es_referencia=True)
+        if not fijos and reporte["estado_evaluacion"] == estados.CORRECTA:
             self.normalizadores = reporte["parametros"]["normalizadores"]
             escribir_json(self.carpeta / "normalizacion.json", self.normalizadores)
+        reporte["decidio"] = ID_REFERENCIA
+        self._registrar(reporte, directorio, iteracion=0)
+        return reporte
+
+    def reusar_referencia(self, origen):
+        """Registra la evaluación de la referencia de otra corrida (misma malla y mismos normalizadores)."""
+        if self.memoria.por_id(ID_REFERENCIA):
+            raise ErrorCiclo("la referencia ya fue evaluada en esta corrida")
+        origen = Path(origen).resolve()
+        previa = Memoria(origen / "historial.jsonl").por_id(ID_REFERENCIA)
+        if previa is None or previa["estado_evaluacion"] != estados.CORRECTA:
+            raise ErrorCiclo(f"{origen} no tiene una referencia correcta para reusar")
+        directorio = self.carpeta / "candidatas" / ID_REFERENCIA
+        if _malla(directorio) != _malla(origen / "candidatas" / ID_REFERENCIA):
+            raise ErrorCiclo(f"la referencia de {origen} es otra malla: no se puede reusar")
+        normalizadores_origen = leer_json(origen / "normalizacion.json")
+        if self.normalizadores is None:
+            self.normalizadores = normalizadores_origen
+            escribir_json(self.carpeta / "normalizacion.json", self.normalizadores)
+        elif self.normalizadores != normalizadores_origen:
+            raise ErrorCiclo(f"{origen} usa otros normalizadores: no se puede reusar su referencia")
+        if (origen / "eval" / ID_REFERENCIA).is_dir():
+            shutil.copytree(origen / "eval" / ID_REFERENCIA, self.carpeta / "eval" / ID_REFERENCIA, symlinks=True)
+        reporte = {k: v for k, v in previa.items()
+                   if k not in ("iteracion", "marca_tiempo", "duplicada_de", "malla", "recibido_A04")}
+        reporte["reusada_de"] = relativa(origen)
         self._registrar(reporte, directorio, iteracion=0)
         return reporte
 
@@ -156,8 +199,11 @@ class Ciclo:
         _solo_lectura(destino)
         return destino
 
-    def evaluar_candidata(self, origen, id_candidata=None, justificacion=None):
-        """A03 → evaluador (E01–E08) → A04 → A05 → A07 para un cgra.json ya escrito por el agente."""
+    def evaluar_candidata(self, origen, id_candidata=None, justificacion=None, decidio="llm", tiempo_decision_s=None):
+        """A03 → evaluador (E01–E08) → A04 → A05 → A07 para un cgra.json ya escrito por el agente.
+
+        ``decidio``: quién propuso la configuración (``llm`` o ``exploracion``, la rama al azar de epsilon);
+        ``tiempo_decision_s``: lo que tardó en proponerla (para los tiempos de convergencia)."""
         if self.normalizadores is None:
             raise ErrorCiclo("no hay referencia correcta evaluada: no se puede optimizar")
         id_candidata = id_candidata or self.siguiente_id()
@@ -168,6 +214,8 @@ class Ciclo:
         reporte = self._evaluar(directorio, id_candidata, self.normalizadores, mejor_anterior)
         if justificacion:
             reporte["justificacion_agente"] = justificacion
+        reporte["decidio"] = decidio
+        reporte["tiempo_decision_s"] = tiempo_decision_s
         return self._registrar(reporte, directorio, iteracion=self.memoria.siguiente_iteracion())
 
     def evaluar_lote(self, origenes, justificaciones=None, paralelo=4):
@@ -196,10 +244,11 @@ class Ciclo:
         for k, reporte in enumerate(reportes):
             if justificaciones[k]:
                 reporte["justificacion_agente"] = justificaciones[k]
+            reporte["decidio"] = "llm"
             registrados.append(self._registrar(reporte, directorios[k], iteracion=primera + k))
         return registrados
 
-    def _evaluar(self, directorio, id_candidata, normalizadores, mejor_anterior):
+    def _evaluar(self, directorio, id_candidata, normalizadores, mejor_anterior, es_referencia=None):
         validacion = validar_accion(directorio, self.contexto, id_candidata)
         carpeta_eval = self.carpeta / "eval" / id_candidata
         if not validacion["paquete_valido"]:
@@ -207,9 +256,9 @@ class Ciclo:
                                           mejor_anterior, carpeta_eval)
         if self.instancias is not None:
             return evaluar_conjunto(directorio, id_candidata, self.instancias, self.corrida, normalizadores,
-                                    mejor_anterior, carpeta_eval, self.compilador)
+                                    mejor_anterior, carpeta_eval, self.compilador, es_referencia=es_referencia)
         return evaluar(directorio, id_candidata, self.instancia, self.corrida, normalizadores, mejor_anterior,
-                       carpeta_eval, self.compilador)
+                       carpeta_eval, self.compilador, es_referencia=es_referencia)
 
     def _reporte_invalido(self, directorio, id_candidata, motivos, normalizadores, mejor_anterior, carpeta_eval):
         """A03 falló: no se llama al evaluador; se registra accion_invalida con sus motivos."""
@@ -267,16 +316,21 @@ class Ciclo:
             id_candidata = self.siguiente_id()
             self._apartar_interrumpidos(id_candidata)
             dir_salida = self.carpeta / "candidatas" / id_candidata
+            t_decision = time.monotonic()
             propuesta = politica.proponer(self.contexto, self.memoria.entrada_politica(),
                                           id_candidata, dir_salida)    # A06/A02: π(C, E) = A
+            t_decision = round(time.monotonic() - t_decision, 3)
             if propuesta is None:
                 self.estado_corrida = "en_pausa: esperando acción del agente"
                 break
             if not dir_salida.exists():
                 dir_salida.mkdir(parents=True)  # la política no entregó nada: A03 la marcará inválida
-            reporte = self.evaluar_candidata(dir_salida, id_candidata, propuesta.get("justificacion"))
+            reporte = self.evaluar_candidata(dir_salida, id_candidata, propuesta.get("justificacion"),
+                                             propuesta.get("decidio", "llm"), t_decision)
             politica.incorporar(recibir_reporte(reporte, id_candidata, dir_salida))
         self.escribir_resumen(self.estado_corrida)
+        from ..herramientas.convergencia import escribir as escribir_convergencia
+        escribir_convergencia(self.carpeta)
         return self.estado_corrida
 
     # --- registro ---------------------------------------------------------
@@ -289,6 +343,8 @@ class Ciclo:
         resumen = {
             "id": self.corrida["id"],
             "estado": estado_corrida or self.estado_corrida or "en_curso",
+            "epsilon": self.corrida.get("epsilon", 0.0),
+            "semilla": self.corrida.get("semilla", 0),
             "actualizado": ahora(),
             "C_min": estado["C_min"],
             "optimas": [o["id_candidata"] for o in estado["optimas"]],

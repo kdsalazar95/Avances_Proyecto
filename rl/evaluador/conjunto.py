@@ -37,25 +37,34 @@ def _promedio(valores):
     return sum(valores) / len(valores) if valores else None
 
 
+def _de_operacion(normalizadores, op):
+    """Los normalizadores de una operación: ``{"C_A_ref", "C_L_ref"}`` (el C_A_ref es el de la malla)."""
+    propios = normalizadores["operaciones"][op]
+    return {"C_A_ref": propios.get("C_A_ref", normalizadores.get("C_A_ref")), "C_L_ref": propios["C_L_ref"]}
+
+
 def evaluar_conjunto(dir_candidata, id_evaluacion, instancias, corrida, normalizadores, mejor_costo_anterior,
-                     carpeta_eval, compilador, paralelo=True):
+                     carpeta_eval, compilador, paralelo=True, es_referencia=None):
     """Evalúa ``dir_candidata`` con cada operación de ``instancias`` ({operacion: instancia}).
 
-    ``normalizadores`` es None para la referencia; si no, ``{"C_A_ref", "operaciones": {op: {...}}}``.
+    ``normalizadores`` es None si se miden aquí (la referencia); si no, ``{"C_A_ref", "operaciones": {op: {...}}}``.
+    ``es_referencia`` (por defecto, ``normalizadores is None``) marca la referencia evaluada con normalizadores
+    fijos: su recompensa es 0.
     Devuelve un reporte E08 con ``por_operacion`` y escribe ``eval/<id>/reporte.json``.
     """
     inicio = time.monotonic()
     carpeta_eval = Path(carpeta_eval)
     carpeta_eval.mkdir(parents=True, exist_ok=True)
     p_fallo = corrida["penalizacion"]["P_fallo"]
-    es_referencia = normalizadores is None
+    medir_normalizadores = normalizadores is None
+    es_referencia = medir_normalizadores if es_referencia is None else es_referencia
     operaciones = list(instancias)
 
     def una(op):
-        norm_op = None if es_referencia else normalizadores["operaciones"][op]
+        norm_op = None if medir_normalizadores else _de_operacion(normalizadores, op)
         # La recompensa de cada operación es solo informativa: la que cuenta se calcula abajo, una vez.
         return op, evaluar(dir_candidata, id_evaluacion, instancias[op], corrida, norm_op, mejor_costo_anterior,
-                           carpeta_eval / op, compilador)
+                           carpeta_eval / op, compilador, es_referencia=es_referencia)
 
     if paralelo and len(operaciones) > 1:
         with ThreadPoolExecutor(max_workers=len(operaciones)) as hilos:
@@ -100,7 +109,7 @@ def evaluar_conjunto(dir_candidata, id_evaluacion, instancias, corrida, normaliz
 
     # Normalizadores: los de la referencia, por operación.
     normalizadores_ = normalizadores
-    if es_referencia and estado == estados.CORRECTA:
+    if medir_normalizadores and estado == estados.CORRECTA:
         por_op = {op: res["parametros"]["normalizadores"] for op, res in resultados.items()}
         normalizadores_ = {"C_A_ref": next(iter(por_op.values()))["C_A_ref"], "operaciones": por_op,
                            "referencia": id_evaluacion}

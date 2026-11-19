@@ -82,6 +82,13 @@ def validar_corrida(datos):
     n_corr = compilador.get("N_corr", 2)
     if not isinstance(n_corr, int) or isinstance(n_corr, bool) or n_corr < 0:
         errores.append("'compilador.N_corr' debe ser un entero >= 0")
+    # Opcionales de la comparación entre sistemas.
+    if "epsilon" in datos and (not _numero(datos["epsilon"]) or not 0 <= datos["epsilon"] <= 1):
+        errores.append("'epsilon' debe ser un número entre 0 y 1 (probabilidad de explorar al azar)")
+    if "semilla" in datos and (not isinstance(datos["semilla"], int) or isinstance(datos["semilla"], bool)):
+        errores.append("'semilla' debe ser un entero")
+    if "normalizadores" in datos and not isinstance(datos["normalizadores"], str):
+        errores.append("'normalizadores' debe ser la ruta a un normalizacion.json con los normalizadores fijos")
     return errores
 
 
@@ -101,6 +108,34 @@ def cargar_corrida(ruta):
     datos.setdefault("politica", {"tipo": "manual"})
     datos["limites"].setdefault("t_max_total_s", None)
     return datos
+
+
+def normalizadores_fijos(corrida):
+    """Los normalizadores fijos de ``corrida["normalizadores"]`` (o None si se miden con la referencia).
+
+    Se comprueba que se midieron con la misma ``formula_latencia`` y que tienen todas las operaciones.
+    """
+    if not corrida.get("normalizadores"):
+        return None
+    ruta = resolver(corrida["normalizadores"])
+    try:
+        datos = leer_json(ruta)
+    except FileNotFoundError:
+        raise ErrorCorrida(f"No existe el archivo de normalizadores {ruta}") from None
+    formula = datos.get("formula_latencia")
+    if formula and formula != corrida["formula_latencia"]:
+        raise ErrorCorrida(f"{ruta}: los normalizadores se midieron con formula_latencia '{formula}' y la corrida "
+                           f"usa '{corrida['formula_latencia']}'")
+    operaciones = corrida["operaciones"] if es_conjunto(corrida) else [corrida["operacion"]]
+    faltan = [op for op in operaciones if op not in datos.get("operaciones", {})]
+    if faltan or not datos.get("C_A_ref"):
+        raise ErrorCorrida(f"{ruta}: faltan C_A_ref o los C_L_ref de {faltan}")
+    fijos = {"C_A_ref": datos["C_A_ref"], "fijos": True, "fuente": str(corrida["normalizadores"]),
+             "operaciones": {op: {"C_A_ref": datos["operaciones"][op].get("C_A_ref", datos["C_A_ref"]),
+                                  "C_L_ref": datos["operaciones"][op]["C_L_ref"]} for op in operaciones}}
+    if not es_conjunto(corrida):  # una operación: el evaluador usa C_A_ref y C_L_ref directos
+        fijos["C_L_ref"] = fijos["operaciones"][corrida["operacion"]]["C_L_ref"]
+    return fijos
 
 
 def es_conjunto(corrida):

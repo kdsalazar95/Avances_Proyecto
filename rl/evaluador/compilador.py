@@ -103,7 +103,9 @@ def correr_con_log(comando, cwd, timeout_s, ruta_log, eco=False, titulo=None, et
             lector.join(5)
             escribir(f"== tiempo máximo superado ({timeout_s} s) ==")
             raise
-        lector.join(5)
+        finally:
+            lector.join(5)
+            proceso.stdout.close()  # sin esto el pipe queda abierto hasta que Python lo recolecta
         escribir(f"== terminó con código {codigo} ==")
     return codigo, list(ultimas)
 

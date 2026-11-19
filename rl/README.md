@@ -1,4 +1,11 @@
-# Ciclo RL de la CGRA: agente LLM + evaluador
+# Sistema 1: agente LLM + evaluador con LLM
+
+Es uno de los dos sistemas que se contrastan en el proyecto:
+
+| | Agente | Evaluador (genera los PE*.txt) |
+|---|---|---|
+| **Sistema 1 (esta carpeta)** | **LLM, sin Greedy** | **Skills 01–09 (LLM)** |
+| Sistema 2 (rama `feature/sistema2-greedy`) | ε-greedy, sin LLM | Dijkstra |
 
 Implementa el diseño del proyecto (PDF "Dijkstra + Greedy _ Agente RL" y el
 diagrama "Evaluación" del PDF anotado):
@@ -27,7 +34,7 @@ diagrama "Evaluación" del PDF anotado):
 # Corrida con los Skills 01–09 reales corridos por Codex (rl/herramientas/codex.sh; con Claude: corrida_reduccion_claude.json)
 uv run python -m rl iniciar --config rl/config/corrida_reduccion.json
 
-# Corrida sin LLM: un sustituto determinista hace el papel de los skills (solo reducción, filas 'M X M' / 'M X' con X en E o V)
+# Solo para pruebas (no es el Sistema 1: no usa los Skills): un sustituto determinista hace el papel de los skills (solo reducción, filas 'M X M' / 'M X')
 uv run python -m rl iniciar --config rl/config/corrida_reduccion_sin_llm.json
 
 # El agente: leer el contexto de decisión y escribir candidatas/it-0001/cgra.json (+ candidata.json)
@@ -45,15 +52,51 @@ uv run python -m rl referencia DIR --computo E,V,E [--sin-este]
 uv run python -m unittest discover -s rl/tests -t .
 ```
 
+## Comparación con el Sistema 2
+
+`rl/config/comparacion.json` deja el Sistema 1 en las mismas condiciones que el Sistema 2:
+
+- **La misma referencia 32x32:** la de `cgra.json` (fila 0 escalar E, fila 1 vectorial V, alternadas, con M
+  en las columnas 0 y 31). Es la configuración de partida: su C es `C_best_0` y la primera recompensa se mide
+  contra ella.
+- **Los mismos normalizadores fijos** (`rl/config/normalizacion.json`, el mismo archivo del Sistema 2). El costo
+  es `C = K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R`: dividir entre `C_A_ref` y `C_L_ref` pone el área y la
+  latencia en la misma escala. Si cada sistema usara los suyos, un mismo C significaría cosas distintas. La
+  referencia se evalúa con ellos (no mide los propios).
+- **Los mismos pesos, K, tolerancias, P_fallo, paciencia (3) y tope de iteraciones (10).**
+- **Epsilon:** con probabilidad `epsilon` la acción es una configuración al azar (filas, columnas y tipo E/V de
+  cada PE del interior al azar, dentro de las restricciones) y si no, la del LLM. `epsilon = 0` es el LLM puro y
+  `epsilon = 1`, búsqueda al azar. No hay Greedy.
+
+```sh
+# Una corrida por epsilon (la referencia 32x32 se evalúa una vez y las demás la reusan) y la comparación
+uv run python -m rl barrido --config rl/config/comparacion.json --epsilons 0 10 20 80 90 100
+
+uv run python -m rl convergencia --corrida resultados/corridas/s1-comparacion-eps000   # rehace los datos de una corrida
+uv run python -m rl comparar DIR1 DIR2 ... --salida DIR                                # junta varias corridas
+```
+
+Datos que deja (`rl/herramientas/convergencia.py`; el Sistema 2 escribe el mismo formato, con su `sistema`):
+
+| Archivo | Contenido |
+|---|---|
+| `<corrida>/convergencia.csv` | Una fila por evaluación (n = 0 la referencia): quién la propuso (`llm`, `exploracion`), estado, tamaño, C, C_A, C_A_norm, C_L_norm, C_R, `C_best` hasta ahí, si mejoró, tiempo de decisión, de evaluación y acumulado |
+| `<corrida>/convergencia.json` | Resumen: epsilon, motivo de fin, evaluaciones, C_ref, C_best, mejora relativa, **convergencia** (evaluación y tiempo en que se alcanzó el mejor C) e **hitos** del 50, 90 y 100 % de la mejora |
+| `<id>-comparacion/comparacion_epsilon.csv` | Una fila por epsilon con ese resumen: la tabla para comparar tiempos de convergencia |
+| `<id>-comparacion/curvas_epsilon.csv` | C y C_best de cada evaluación de cada epsilon (formato largo): las curvas de cómo baja la función de costo |
+
+El tiempo acumulado cuenta la decisión (el LLM o el azar) y la evaluación (Skills + simulador) desde la
+primera iteración; la referencia es n = 0, tiempo 0.
+
 ## Estructura
 
 ```
 rl/
-├── entorno/      reglas del problema, compartidas por RL y Dijkstra + Greedy: contexto (A01) y validación de la acción (A03)
+├── entorno/      reglas del problema: contexto (A01) y validación de la acción (A03)
 ├── agente/       lo que propone y aprende: política, recepción, historial, óptimas y ciclo (A02, A04–A08)
 ├── evaluador/    E01–E08: Skills 01–09 (o el sustituto) + simulador, métricas, recompensa y reporte
-├── herramientas/ referencia, informe, recálculo, GIF del log, codex.sh
-├── config/       corrida_*.json
+├── herramientas/ convergencia y barrido de epsilon (comparación), referencia, informe, recálculo, GIF del log, codex.sh
+├── config/       comparacion.json + normalizacion.json (la comparación) y corrida_*.json
 └── tests/
 ```
 
@@ -69,7 +112,7 @@ Las corridas se escriben en `resultados/corridas/<id>/` (no se versionan). El di
 | A03 | `entorno/validacion_accion.py` | Validación previa: `FormatoCGRA`, rango, tipos reales, memoria en bordes, memoria y cómputo |
 | A04 | `agente/recepcion.py` | Verifica id, hash del `cgra.json` y coherencia del reporte |
 | A05 | `agente/memoria.py` | Historial (solo agregar), ya evaluada, reconstrucción, mejor candidato y entrada de la política π(C, E) |
-| A06 | `agente/politica.py` | Política del enunciado π(C, E) = A: `proponer`/`incorporar`; manual, comando (LLM) y guion |
+| A06 | `agente/politica.py` | Política del enunciado π(C, E) = A: `proponer`/`incorporar`; manual, comando (LLM) y guion; `PoliticaEpsilon` (con probabilidad epsilon, una configuración al azar) |
 | A07 | `agente/optimas.py` | Óptimas: mejora estricta, empates, duplicados |
 | A08 | `agente/ciclo.py` | Referencia, ciclo, paciencia, reanudación, `resumen.json` |
 | E01 | `evaluador/preparacion.py` | Carpeta `eval/<id>/` con el `cgra.json` y la memoria inicial |

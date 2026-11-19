@@ -10,6 +10,9 @@
     informe  --corrida resultados/corridas/r05                      informe de óptimas y no óptimas (informe.md)
     recalcular --corrida resultados/corridas/r04 --formula ciclos_x_nops   costos con otra fórmula, sin volver a evaluar
     gif      LOG [-o salida.gif]                            GIF del LLM trabajando, a partir de eval/<id>/skills/intento-<n>.log
+    barrido  --config rl/config/comparacion.json --epsilons 0 10 20 80 90 100   una corrida por epsilon + comparación
+    convergencia --corrida resultados/corridas/r01                  convergencia.csv/.json de una corrida
+    comparar DIR1 DIR2 ... --salida DIR                     comparacion_epsilon.csv y curvas_epsilon.csv de varias corridas
 """
 
 import argparse
@@ -18,7 +21,7 @@ import sys
 from pathlib import Path
 
 from .agente.ciclo import Ciclo, ErrorCiclo, iniciar
-from .agente.politica import PoliticaGuion, PoliticaManual, crear_politica
+from .agente.politica import PoliticaGuion, crear_politica
 from .comun import ARCHIVO_METADATOS, RAIZ_REPO, leer_json, relativa
 from .corrida import ErrorCorrida
 
@@ -80,6 +83,15 @@ def main(argv=None):
     p.add_argument("-o", "--salida", help="ruta del GIF (por defecto, junto al log)")
     p.add_argument("--filas", type=int, default=28, help="líneas visibles de la terminal")
     p.add_argument("--columnas", type=int, default=100, help="ancho de la terminal en caracteres")
+    p = sub.add_parser("barrido", help="una corrida por epsilon (misma configuración y semilla) y su comparación")
+    p.add_argument("--config", required=True)
+    p.add_argument("--epsilons", nargs="+", required=True, help="0 a 1, o porcentajes: 0 10 20 80 90 100")
+    p.add_argument("--corridas", default=str(CORRIDAS))
+    p.add_argument("--max-iteraciones", type=int)
+    sub.add_parser("convergencia").add_argument("--corrida", required=True)
+    p = sub.add_parser("comparar", help="junta los datos de convergencia de varias corridas")
+    p.add_argument("corridas_a_comparar", nargs="+", metavar="CORRIDA")
+    p.add_argument("--salida", required=True)
     argumentos = parser.parse_args(argv)
 
     try:
@@ -115,13 +127,13 @@ def main(argv=None):
         elif argumentos.comando == "ciclo":
             ciclo = Ciclo(argumentos.corrida)
             politica = PoliticaGuion(argumentos.guion) if argumentos.guion else \
-                crear_politica(ciclo.corrida["politica"], ciclo.carpeta)
+                crear_politica(ciclo.corrida["politica"], ciclo.carpeta, corrida=ciclo.corrida)
             vistos = len(ciclo.memoria.entradas)
             estado = ciclo.correr(politica, argumentos.max_iteraciones)
             for entrada in ciclo.memoria.entradas[vistos:]:
                 _mostrar(entrada)
             print(f"Estado de la corrida: {estado}")
-            if isinstance(politica, PoliticaManual) and politica.ultimo_prompt:
+            if getattr(politica, "ultimo_prompt", None):
                 print(f"Contexto para la próxima acción: {relativa(politica.ultimo_prompt)}")
         elif argumentos.comando == "resumen":
             ciclo = Ciclo(argumentos.corrida)
@@ -169,6 +181,31 @@ def main(argv=None):
                 print(f"Error: {error}", file=sys.stderr)
                 return 1
             print(f"GIF escrito en {ruta}")
+        elif argumentos.comando == "barrido":
+            from .herramientas.barrido import barrido, leer_epsilons
+
+            def avance(ciclo, estado):
+                c = json.loads((ciclo.carpeta / "convergencia.json").read_text(encoding="utf-8"))
+                print(f"{ciclo.corrida['id']}: {estado} · C_best = {c['C_best']} · convergió en la evaluación "
+                      f"{(c['convergencia'] or {}).get('evaluacion')}", flush=True)
+
+            try:
+                epsilons = leer_epsilons(argumentos.epsilons)
+            except ValueError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                return 1
+            _, resumenes = barrido(argumentos.config, epsilons, argumentos.corridas,
+                                   argumentos.max_iteraciones, al_terminar=avance)
+            print(f"Comparación: {len(resumenes)} corridas en {relativa(Path(argumentos.corridas))}/"
+                  f"{resumenes[0]['corrida'].rsplit('-eps', 1)[0]}-comparacion/")
+        elif argumentos.comando == "convergencia":
+            from .herramientas.convergencia import escribir
+            datos = escribir(argumentos.corrida)
+            print(json.dumps(datos, indent=2, ensure_ascii=False))
+        elif argumentos.comando == "comparar":
+            from .herramientas.convergencia import comparar
+            resumenes = comparar(argumentos.corridas_a_comparar, argumentos.salida)
+            print(f"{len(resumenes)} corridas: {argumentos.salida}/comparacion_epsilon.csv, curvas_epsilon.csv")
     except (ErrorCiclo, ErrorCorrida) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

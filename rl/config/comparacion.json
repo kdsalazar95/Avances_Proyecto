@@ -1,0 +1,131 @@
+{
+  "id": "s1-comparacion",
+  "descripcion": "Sistema 1 (agente LLM sin Greedy + evaluador con los Skills 01-09) para la comparación con el Sistema 2 (Greedy + Dijkstra). Mismas condiciones que el Sistema 2: la misma referencia 32x32 (la de cgra.json: fila 0 escalar E, fila 1 vectorial V, alternadas, con M en las columnas 0 y 31), los mismos normalizadores fijos (normalizacion.json), los mismos pesos, K, tolerancias y P_fallo, y la misma paciencia y tope de iteraciones. Cada cgra.json se evalúa con las tres operaciones. Con probabilidad epsilon la acción es una configuración al azar; si no, la propone el LLM.",
+  "operaciones": [
+    "reduccion",
+    "matmul",
+    "convolucion"
+  ],
+  "fuente_c": "cgra/operaciones/operaciones.c",
+  "esquema_cgra": "cgra/src/cgra.json",
+  "restricciones": {
+    "filas": {
+      "minimo": 1,
+      "maximo": 32
+    },
+    "columnas": {
+      "minimo": 3,
+      "maximo": 32
+    },
+    "palabras_memoria_max": 4096,
+    "anchos_vector_permitidos": [
+      4
+    ],
+    "memoria_solo_en_bordes_oeste_este": true,
+    "requiere_memoria_y_computo": true
+  },
+  "pesos_area": {
+    "w1_MS": 4,
+    "w2_MV": 8,
+    "w3_CS": 1,
+    "w4_CV": 2
+  },
+  "K": {
+    "K_A": 1.0,
+    "K_L": 1.0,
+    "K_R": 1.0
+  },
+  "formula_latencia": "ciclos_x_nops",
+  "tolerancias": {
+    "eps_abs": 1e-06,
+    "eps_rel": 1e-06,
+    "epsilon_cr": 1e-09
+  },
+  "penalizacion": {
+    "P_fallo": 10.0
+  },
+  "tolerancia_empate_costo": 1e-09,
+  "limites": {
+    "max_iteraciones": 10,
+    "paciencia": 3,
+    "t_max_simulacion_s": 60,
+    "t_max_total_s": null
+  },
+  "normalizadores": "rl/config/normalizacion.json",
+  "epsilon": 0.0,
+  "semilla": 0,
+  "referencia": {
+    "descripcion": "La misma 32x32 del Sistema 2: generar_malla(32, 32) con la distribución de cgra.json (filas pares E, impares V; M en las columnas 0 y 31).",
+    "generar": {
+      "malla": [
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M",
+        "M E E E E E E E E E E E E E E E E E E E E E E E E E E E E E E M",
+        "M V V V V V V V V V V V V V V V V V V V V V V V V V V V V V V M"
+      ]
+    }
+  },
+  "compilador": {
+    "descripcion": "Skills 01–09 con Codex. 'eco': muestra en la terminal lo que Codex va haciendo.",
+    "tipo": "comando",
+    "comando": [
+      "rl/herramientas/codex.sh",
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "--skip-git-repo-check",
+      "--color",
+      "never",
+      "{prompt}"
+    ],
+    "timeout_s": 1800,
+    "eco": true,
+    "N_corr": 2
+  },
+  "politica": {
+    "tipo": "comando",
+    "comando": [
+      "claude",
+      "-p",
+      "{prompt}",
+      "--permission-mode",
+      "acceptEdits"
+    ],
+    "timeout_s": 1800
+  },
+  "comentarios": {
+    "normalizadores": "Los normalizadores fijos que usan los dos sistemas: C = K_A·C_A/C_A_ref + K_L·C_L/C_L_ref + K_R·C_R con los mismos C_A_ref y C_L_ref en los dos, para que un mismo C signifique lo mismo. La referencia 32x32 se evalúa con ellos (no mide los suyos).",
+    "limites": "max_iteraciones y paciencia: los mismos números del Sistema 2 (max_episodios 10, paciencia 3 en su agente.json).",
+    "epsilon": "Probabilidad de que la acción sea una configuración al azar (filas, columnas y tipo E/V de cada PE del interior al azar, dentro de las restricciones) en lugar de la del LLM. 0 = LLM puro; 1 = búsqueda al azar. El barrido (python -m rl barrido) lo cambia por corrida.",
+    "semilla": "Semilla del azar de epsilon: con la misma semilla, las mismas iteraciones exploran.",
+    "compilador": "Skills 01-09 con Codex, en una sesión separada del agente (Claude)."
+  }
+}

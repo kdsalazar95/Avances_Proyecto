@@ -23,9 +23,14 @@ Implementaciones:
 * ``PoliticaComando``: llama a un LLM en modo no interactivo en otro proceso
   (``claude -p``, ``codex exec``...), con la plantilla de corrida.json.
 * ``PoliticaGuion``: entrega paquetes ya escritos, en orden (pruebas, demos).
+* ``PoliticaEpsilon``: envuelve a otra (el LLM) con epsilon para la comparación entre sistemas: con
+  probabilidad ``epsilon`` la acción es una configuración al azar dentro de las restricciones
+  (exploración) y si no, la del LLM. ``epsilon = 0`` es el LLM puro y ``epsilon = 1``, búsqueda al azar.
+  No hay Greedy: la rama que no explora es siempre el LLM.
 """
 
 import json
+import random
 import shutil
 import subprocess
 from pathlib import Path
@@ -200,13 +205,69 @@ class PoliticaGuion(Politica):
         self.recibidos.append(recibido)
 
 
-def crear_politica(config, carpeta_corrida, guion=None):
+MEMORIA_OPS = {"LD", "ST", "VLD", "VST"}  # las mismas de entorno/validacion_accion.py
+
+
+def configuracion_al_azar(azar, restricciones):
+    """Una malla al azar dentro de las restricciones: filas y columnas uniformes en su rango, columnas oeste y
+    este de memoria y cada PE del interior de un tipo de cómputo al azar (E o V). Devuelve la lista de filas."""
+    por_tipo = restricciones["instrucciones_por_tipo"]
+    memoria = sorted(t for t, ins in por_tipo.items() if set(ins) & MEMORIA_OPS)
+    computo = sorted(t for t, ins in por_tipo.items() if not set(ins) & MEMORIA_OPS)
+    if not memoria or not computo:
+        raise ValueError("el esquema necesita al menos un tipo de memoria y uno de cómputo")
+    filas = azar.randint(restricciones["filas"]["minimo"], restricciones["filas"]["maximo"])
+    columnas = azar.randint(max(3, restricciones["columnas"]["minimo"]), restricciones["columnas"]["maximo"])
+    m = memoria[0]
+    return [" ".join([m] + [azar.choice(computo) for _ in range(columnas - 2)] + [m]) for _ in range(filas)]
+
+
+class PoliticaEpsilon(Politica):
+    """Epsilon sobre el LLM: con probabilidad ``epsilon``, una configuración al azar; si no, el LLM.
+
+    El azar de cada iteración depende solo de ``semilla`` y del id (``it-0003``), así que una corrida
+    reanudada toma las mismas decisiones. Cada propuesta lleva ``decidio``: ``llm`` o ``exploracion``.
+    """
+
+    def __init__(self, base, epsilon, semilla, esquema):
+        if not 0 <= epsilon <= 1:
+            raise ValueError("epsilon debe estar entre 0 y 1")
+        self.base, self.epsilon, self.semilla, self.esquema = base, epsilon, semilla, esquema
+
+    @property
+    def ultimo_prompt(self):
+        return getattr(self.base, "ultimo_prompt", None)
+
+    def proponer(self, contexto, entrada, id_candidata, dir_salida):
+        azar = random.Random(f"{self.semilla}:{id_candidata}")
+        if self.epsilon > 0 and azar.random() < self.epsilon:
+            from ..herramientas.referencia import escribir_cgra
+            malla = configuracion_al_azar(azar, contexto["restricciones"])
+            texto = f"exploración al azar (epsilon = {self.epsilon}): malla {len(malla)}x{len(malla[0].split())}"
+            escribir_cgra(dir_salida, malla, esquema=self.esquema, justificacion=texto, id_candidata=id_candidata)
+            return {**_propuesta(id_candidata, dir_salida), "decidio": "exploracion"}
+        propuesta = self.base.proponer(contexto, entrada, id_candidata, dir_salida)
+        return None if propuesta is None else {**propuesta, "decidio": "llm"}
+
+    def incorporar(self, recibido):
+        return self.base.incorporar(recibido)
+
+
+def crear_politica(config, carpeta_corrida, guion=None, corrida=None):
+    """La política de ``config`` (``politica`` de corrida.json). Con ``corrida`` (corrida.json completo),
+    se envuelve en ``PoliticaEpsilon`` con su ``epsilon`` (0 si no tiene) y su ``semilla``."""
     tipo = config.get("tipo", "manual")
     prompts = Path(carpeta_corrida) / "prompts"
     if tipo == "manual":
-        return PoliticaManual(prompts)
-    if tipo == "comando":
-        return PoliticaComando(config.get("comando"), prompts, config.get("timeout_s", 1800))
-    if tipo == "guion":
-        return PoliticaGuion(guion or config.get("paquetes", []))
-    raise ValueError(f"tipo de política desconocido: {tipo}")
+        base = PoliticaManual(prompts)
+    elif tipo == "comando":
+        base = PoliticaComando(config.get("comando"), prompts, config.get("timeout_s", 1800))
+    elif tipo == "guion":
+        base = PoliticaGuion(guion or config.get("paquetes", []))
+    else:
+        raise ValueError(f"tipo de política desconocido: {tipo}")
+    if corrida is None:
+        return base
+    from ..corrida import resolver
+    return PoliticaEpsilon(base, corrida.get("epsilon", 0.0), corrida.get("semilla", 0),
+                           resolver(corrida["esquema_cgra"]))
