@@ -10,12 +10,12 @@ files disagree.
 
 Read the [Mesh Compatibility Contract](mesh-compatibility.md) first. The only PE types are `M`, `E` and `V`. Every mesh needs at least 3 columns
 (`M`, compute, `M`). Meshes with at least 2 rows and 3 columns use the E/V row
-rotation below. Single-row meshes and meshes with fewer than 3 columns (such as
-`1x3`, `2x1`, `2x2`, `3x2`) are **not valid**: they do not have two compute rows
-for an E and a V, or they have no memory column on each side, and `FormatoCGRA`
-rejects them. Report the
-size as invalid and do not compile for it. A map (including an explicit
-`malla`) without at least one `E` and one `V` is invalid too. Always match the actual configured
+rotation below. Meshes with fewer than 3 columns (such as `2x1`, `2x2`, `3x2`)
+are **not valid**: they have no memory column on each side, and `FormatoCGRA`
+rejects them; a single-row mesh is valid only with an explicit `malla` (the
+automatic layout rejects it). Report an invalid size and do not compile for it.
+A map does not need both an `E` and a `V`: only-`E` maps compile in scalar mode
+and only-`V` maps with vector instructions (see the contract). Always match the actual configured
 map before generating any PE programs.
 
 `src/cgra.json` describes the CGRA, so it does not have to be repeated in every
@@ -28,7 +28,7 @@ user, or the Greedy agent). A file looks like this:
 ```json
 {
   "filas":    {"minimo": 1, "maximo": 32},
-  "columnas": {"minimo": 1, "maximo": 32},
+  "columnas": {"minimo": 3, "maximo": 32},
   "palabras_memoria": <palabras>,
   "ancho_vector": <W>,
   "tipos_pe": {

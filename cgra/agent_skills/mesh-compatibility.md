@@ -20,17 +20,24 @@ at least 3 columns.
 
 | Dimensions | Types and placement | Execution topology |
 |---|---|---|
-| `1xN` (any single row) | not valid: `FormatoCGRA` raises an error | none |
+| `1xN` (any single row), automatic layout | not valid: `FormatoCGRA` raises an error | none |
+| `1xN` with an explicit `malla`, e.g. `M E E M` | valid | the explicit map |
 | fewer than 3 columns, e.g. `2x1`, `2x2`, `3x2` | not valid: `FormatoCGRA` raises an error | none |
 | at least 2 rows and at least 3 columns | west/east `M`; interior rows rotate `E`, `V` | border layout from `distribucion` |
 
-Dimensions are always rows x columns. A mesh needs at least two rows so it can
-hold both an `E` and a `V`, and at least three columns (`M`, compute, `M`).
-Report invalid sizes as an invalid configuration and do not generate PE files
-for them. Any map, automatic or explicit, that does not have at least one `E`
-and one `V` is also invalid, because the operations need both scalar and vector
-compute. Transposing a shape can change its assignment: 3x4 and 4x3 have
-different memory servers and routes.
+Dimensions are always rows x columns. Every mesh needs at least three columns
+(`M`, compute, `M`). The automatic layout needs at least two rows; an explicit
+`malla` may have a single row. Report invalid sizes as an invalid configuration
+and do not generate PE files for them.
+
+A map does **not** need both an `E` and a `V`. A map with only `E` compute PEs is
+valid: compile it in scalar mode (no vector instructions). A map with only `V`
+compute PEs is valid too: compile every operation with vector instructions
+(`VLD`, `VADD`, `VREDSUM`, `VBCAST`...). If an operation needs scalar
+arithmetic that no `V` instruction can do, that is an impossible mapping for this
+hardware: report it as such ("Reportar"), not as an invalid configuration.
+Transposing a shape can change its assignment: 3x4 and 4x3 have different memory
+servers and routes.
 
 ## Capability Checks Before Mapping Work
 

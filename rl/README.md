@@ -84,6 +84,8 @@ uv run python -m rl barrido --config rl/config/comparacion.json --epsilons 0 10 
 
 uv run python -m rl convergencia --corrida resultados/corridas/s1-comparacion-eps000   # rehace los datos de una corrida
 uv run python -m rl comparar DIR1 DIR2 ... --salida DIR                                # junta varias corridas
+uv run python -m rl resultados --corrida DIR                                           # tabla, curva y GIF de una corrida
+uv run python -m rl graficas COMP_S1 [COMP_S2] --salida DIR                            # gráficas de la comparación
 ```
 
 Datos que deja (`rl/herramientas/convergencia.py`; el Sistema 2 escribe el mismo formato, con su `sistema`):
@@ -95,6 +97,9 @@ Datos que deja (`rl/herramientas/convergencia.py`; el Sistema 2 escribe el mismo
 | `<corrida>/episodios.json` | Los episodios: pasos, mejor configuración y su C, si bajó el mejor de la corrida y por qué terminó |
 | `<id>-comparacion/comparacion_epsilon.csv` | Una fila por epsilon y paciencia (6 x 3 = 18) con ese resumen: la tabla para comparar tiempos de convergencia |
 | `<id>-comparacion/curvas_epsilon.csv` | C y C_best de cada evaluación de cada epsilon y paciencia (formato largo): las curvas de cómo baja la función de costo |
+| `<corrida>/configuraciones.csv` (+ `_operaciones.csv`, `.json`) | Tabla de todas las configuraciones distintas, con las columnas de la tabla del Sistema 2: costos, ciclos, NOPs, latencia y error por operación, si es eficiente (Pareto), quién la propuso, en qué episodio y si fue la mejor de su episodio |
+| `<corrida>/curva_costos.png`, `exploracion.gif` | El C de cada evaluación en orden, y un cuadro por evaluación con la malla propuesta (colores M, E, V del Sistema 2) y la curva hasta ese punto |
+| `<id>-comparacion/*.png` | Las gráficas de la comparación: mejor C por evaluación y por tiempo (una línea por epsilon), tiempo y evaluaciones hasta converger (por epsilon y paciencia) y mejor C por epsilon. Con `python -m rl graficas COMP_S1 COMP_S2 --salida DIR` salen los dos sistemas lado a lado |
 
 **Paciencia sin correr de más.** La paciencia solo decide cuándo se deja de intentar: con la misma semilla, una
 corrida con paciencia 3 hace los mismos primeros episodios que una con paciencia 10 (el LLM solo ve lo que ya

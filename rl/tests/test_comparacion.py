@@ -60,8 +60,9 @@ class _Base(unittest.TestCase):
         self._tmp.cleanup()
 
     def config(self, nombre_="corrida.json", **cambios):
+        """La corrida de prueba; sin tabla, curva ni GIF al terminar (``informes``), salvo que se pidan."""
         ruta = self.raiz / nombre_
-        escribir_json(ruta, corrida(**cambios))
+        escribir_json(ruta, corrida(**{"informes": False, **cambios}))
         return ruta
 
     def guion(self, *nombres):
@@ -301,6 +302,38 @@ class TestConvergencia(_Base):
         por_p = leer_json(larga / "convergencia.json")["por_paciencia"]
         self.assertEqual(sorted(por_p, key=int), ["3", "4"])  # las <= 4 de PACIENCIAS, y la de la corrida
         self.assertLessEqual(por_p["3"]["episodios"], por_p["4"]["episodios"])
+
+
+class TestResultados(_Base):
+
+    def test_1_tabla_curva_gif_y_graficas(self):
+        """Al terminar una corrida por episodios: configuraciones.csv (las columnas del Sistema 2, una fila por
+        configuración distinta, el frente de Pareto marcado), curva_costos.png y exploracion.gif; y las gráficas de
+        la comparación a partir de comparacion_epsilon.csv y curvas_epsilon.csv."""
+        from rl.herramientas import tabla
+        ciclo = iniciar(self.config(epsilon=0.5, semilla=1, informes=True, limites=dict(POR_EPISODIOS, max_episodios=3)),
+                        self.raiz / "corridas")
+        ciclo.correr(PoliticaEpsilon(self.llm("V3", "V2", "E3"), 0.5, 1, ESQUEMA_CGRA))
+        with (ciclo.carpeta / "configuraciones.csv").open(encoding="utf-8") as f:
+            filas = list(csv.DictReader(f))
+        self.assertEqual(list(filas[0])[:len(tabla.BASE)], ["configuracion"] + tabla.BASE[1:])
+        claves = {e["clave_hardware"] for e in ciclo.memoria.entradas if e.get("clave_hardware")}
+        self.assertEqual(len(filas), len(claves))
+        self.assertTrue(any(f["eficiente"] == "True" for f in filas))
+        self.assertEqual(sum(f["origen"] == "referencia" for f in filas), 1)
+        self.assertIn("[E/V/E]", next(f["configuracion"] for f in filas if f["origen"] == "referencia"))
+        for archivo in ("curva_costos.png", "exploracion.gif", "configuraciones.json", "configuraciones_operaciones.csv"):
+            self.assertTrue((ciclo.carpeta / archivo).is_file(), archivo)
+        from PIL import Image
+        with Image.open(ciclo.carpeta / "exploracion.gif") as gif:
+            self.assertEqual(gif.n_frames, len(ciclo.memoria.entradas) + 1)  # una por evaluación y la mejor
+        # gráficas de la comparación
+        salida = self.raiz / "comp"
+        convergencia.comparar([ciclo.carpeta], salida, paciencias=[1, 2])
+        self.assertEqual(cli(["graficas", str(salida), "--salida", str(salida)]), 0)
+        for archivo in ("convergencia_por_evaluacion.png", "convergencia_por_tiempo.png", "tiempo_convergencia.png",
+                        "mejor_costo.png"):
+            self.assertTrue((salida / archivo).is_file(), archivo)
 
 
 class TestBarrido(_Base):

@@ -13,6 +13,8 @@
     barrido  --config rl/config/comparacion.json --epsilons 0 10 20 80 90 100   una corrida por epsilon + comparación
     convergencia --corrida resultados/corridas/r01                  convergencia.csv/.json de una corrida
     comparar DIR1 DIR2 ... --salida DIR                     comparacion_epsilon.csv y curvas_epsilon.csv de varias corridas
+    resultados --corrida resultados/corridas/r01                    tabla de configuraciones, curva de costos y GIF
+    graficas COMP1 [COMP2 ...] --salida DIR                 gráficas de la comparación (también con la del Sistema 2)
 """
 
 import argparse
@@ -95,6 +97,12 @@ def main(argv=None):
     sub.add_parser("convergencia").add_argument("--corrida", required=True)
     p = sub.add_parser("comparar", help="junta los datos de convergencia de varias corridas")
     p.add_argument("corridas_a_comparar", nargs="+", metavar="CORRIDA")
+    p.add_argument("--salida", required=True)
+    p = sub.add_parser("resultados", help="tabla de configuraciones, curva de costos y GIF de una corrida")
+    p.add_argument("--corrida", required=True)
+    p.add_argument("--sin-gif", action="store_true")
+    p = sub.add_parser("graficas", help="gráficas de una o más carpetas de comparación (Sistema 1 y Sistema 2)")
+    p.add_argument("comparaciones", nargs="+", metavar="COMPARACION")
     p.add_argument("--salida", required=True)
     argumentos = parser.parse_args(argv)
 
@@ -210,6 +218,13 @@ def main(argv=None):
             from .herramientas.convergencia import escribir
             datos = escribir(argumentos.corrida)
             print(json.dumps(datos, indent=2, ensure_ascii=False))
+        elif argumentos.comando == "resultados":
+            from .herramientas.resultados import escribir_resultados
+            print(escribir_resultados(argumentos.corrida, gif=not argumentos.sin_gif))
+        elif argumentos.comando == "graficas":
+            from .herramientas.graficas import graficar
+            for ruta in graficar(argumentos.comparaciones, argumentos.salida):
+                print(ruta)
         elif argumentos.comando == "comparar":
             from .herramientas.convergencia import comparar
             resumenes = comparar(argumentos.corridas_a_comparar, argumentos.salida)

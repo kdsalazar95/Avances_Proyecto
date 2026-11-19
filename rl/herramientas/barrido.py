@@ -10,7 +10,7 @@ las 18 combinaciones de epsilon y paciencia.
 La referencia 32x32 se evalúa una sola vez, en la primera corrida, y las demás reusan esa evaluación (misma malla y
 mismos normalizadores). Las corridas comparten la caché de evaluaciones (``<id>-cache/``): una configuración ya
 evaluada en otra corrida no se vuelve a evaluar y cuenta lo que tardó cuando se evaluó. Si una corrida ya existe,
-se reanuda donde quedó. Al final se escriben los archivos de la comparación en ``<id>-comparacion/``.
+se reanuda donde quedó. Al final se escriben los archivos de la comparación en ``<id>-comparacion/``, con sus gráficas (``graficas.py``).
 """
 
 from pathlib import Path
@@ -66,5 +66,12 @@ def barrido(ruta_config, epsilons, carpeta_corridas, max_iteraciones=None, polit
         if al_terminar:
             al_terminar(ciclo, estado)
         carpetas.append(carpeta)
-    resumenes = comparar(carpetas, carpeta_corridas / f"{base['id']}-comparacion", paciencias or PACIENCIAS)
+    salida = carpeta_corridas / f"{base['id']}-comparacion"
+    resumenes = comparar(carpetas, salida, paciencias or PACIENCIAS)
+    if base.get("informes", True):
+        try:
+            from .graficas import graficar
+            graficar([salida], salida)
+        except ImportError as error:
+            print(f"Gráficas de la comparación no generadas ({error}): instale matplotlib", flush=True)
     return carpetas, resumenes

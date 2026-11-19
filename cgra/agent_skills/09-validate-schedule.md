@@ -40,8 +40,8 @@ generated program is still validated against the shared loader below.
 12. Validate actual instruction permissions: memory accesses only on M, scalar
     arithmetic only on E, vector arithmetic only on V when configured. No
     scalar arithmetic on V or vector arithmetic/relays on E. The map uses only
-    M, E and V, with at least one E and one V; a 1x1, 2x1, 1x2 or single-row
-    mesh is an invalid size. In scalar mode no vector
+    M, E and V (it does not need both E and V); a mesh with fewer than 3
+    columns, or a single row without an explicit `malla`, is an invalid size. In scalar mode no vector
     instruction is emitted.
 13. `memoria.bin` fits in `palabras_memoria` of `src/cgra.json`.
 14. Every assigned compute PE has compatible outbound/return routes to its

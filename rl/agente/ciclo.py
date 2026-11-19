@@ -513,6 +513,9 @@ class Ciclo:
         self.escribir_resumen(self.estado_corrida)
         from ..herramientas.convergencia import escribir as escribir_convergencia
         escribir_convergencia(self.carpeta)
+        if self.corrida.get("informes", True):
+            from ..herramientas.resultados import escribir_resultados
+            escribir_resultados(self.carpeta)
         return self.estado_corrida
 
     # --- registro ---------------------------------------------------------
